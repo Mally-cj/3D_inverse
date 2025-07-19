@@ -1,0 +1,7 @@
+*pth_*
+*.pth
+*zip
+
+__MACOSX*
+*.pthF
+/data
