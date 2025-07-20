@@ -641,7 +641,7 @@ class MyModule(nn.Module):
     def forward(self, x):
         y = self.ck*x**2 + self.ak * x + self.bk
         return y
-mymodel = MyModule().cuda()
+# mymodel = MyModule().cuda()  # 注释掉以支持CPU运行
 
 
 class forward_model(nn.Module):
@@ -662,7 +662,7 @@ class forward_model(nn.Module):
                              kernel_size=(50,1),
                              padding='same')
 
-        self.weights = nn.Parameter(torch.randn(1, 1, 50, 1), requires_grad=True).to('cuda')
+        self.weights = nn.Parameter(torch.randn(1, 1, 50, 1), requires_grad=True)
         self.tanh = nn.Tanh()
         self.outc = nn.Linear(4, 1)
 

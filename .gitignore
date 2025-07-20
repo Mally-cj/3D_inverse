@@ -5,3 +5,8 @@
 __MACOSX*
 *.pthF
 /data
+
+*__pycache__*
+*pkl
+*npy
+seisvis/dist
