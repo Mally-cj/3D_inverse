@@ -768,6 +768,7 @@ if not Train:
     all_pred = []
     all_true = []
     all_input = []
+    all_back = []  # 新增：收集低频背景阻抗
     with torch.no_grad():
         for batch_idx, (test_S_obs, test_Z_full, test_Z_back, test_Z_true) in enumerate(Test_loader):
             datarn = torch.matmul(WW.T, test_S_obs - torch.matmul(WW, test_Z_back))
@@ -778,18 +779,22 @@ if not Train:
             all_pred.append(Z_pred.cpu().numpy())
             all_true.append(test_Z_full.cpu().numpy())
             all_input.append(test_S_obs.cpu().numpy())
+            all_back.append(test_Z_back.cpu().numpy())  # 新增
             print(f"   处理批次 {batch_idx + 1}/{len(Test_loader)}")
     print("✅ 测试完成")
     # 拼成3D体 [N, 1, time, space] -> [N, time, space]
     all_pred = np.concatenate(all_pred, axis=0)
     all_true = np.concatenate(all_true, axis=0)
     all_input = np.concatenate(all_input, axis=0)
+    all_back = np.concatenate(all_back, axis=0)  # 新增
     all_pred = np.squeeze(all_pred, axis=1)
     all_true = np.squeeze(all_true, axis=1)
     all_input = np.squeeze(all_input, axis=1)
+    all_back = np.squeeze(all_back, axis=1)  # 新增
     # 反归一化
     all_pred_imp = np.exp(all_pred * (logimpmax - logimpmin) + logimpmin)
     all_true_imp = np.exp(all_true * (logimpmax - logimpmin) + logimpmin)
+    all_back_imp = np.exp(all_back * (logimpmax - logimpmin) + logimpmin)
     # 保存为3D体
     print(f"\n💾 保存推理结果3D数据...")
     np.save('prediction_sample.npy', all_pred)
@@ -797,7 +802,9 @@ if not Train:
     np.save('input_sample.npy', all_input)
     np.save('prediction_impedance.npy', all_pred_imp)
     np.save('true_impedance.npy', all_true_imp)
+    np.save('background_impedance.npy', all_back_imp)  # 新增
     print(f"   ✅ 推理3D数据已保存: prediction_impedance.npy, true_impedance.npy 等 shape: {all_pred_imp.shape}")
+    print(f"   ✅ 低频背景阻抗已保存: background_impedance.npy shape: {all_back.shape}")
     print("\n" + "="*80)
     print("🎉 程序执行完成")
     print("="*80)

@@ -10,3 +10,5 @@ __MACOSX*
 *pkl
 *npy
 seisvis/dist
+
+results/
