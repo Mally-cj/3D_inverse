@@ -28,9 +28,10 @@ from obspy.io.segy.segy import _read_segy
 import pdb
 import sys
 sys.path.append('..')
-import data_tools as tools
+# import data_tools as tools
 from icecream import ic 
 sys.path.append('../codes')
+sys.path.append('deep_learning_impedance_inversion_chl')
 from cpp_to_py import generate_well_mask as generate_well_mask2
 from cpp_to_py import get_wellline_and_mask as get_wellline_and_mask2
 import psutil
@@ -94,7 +95,7 @@ print("="*80)
 print("\n🔄 加载工程用完整阻抗数据 (训练用)...")
 print("   说明：是用测井数据插值后的完整阻抗，井位处精确，其他位置插值估计")
 # 工程数据：测井插值得到的完整阻抗（这是实际工程的起点）
-segy = _read_segy("../data/yyf_smo_train_Volume_PP_IMP.sgy")
+segy = _read_segy("data/yyf_smo_train_Volume_PP_IMP.sgy")
 impedance_model_full = []
 for i in range(0, len(segy.traces)):
     impedance_model_full.append(segy.traces[i].data)
@@ -127,7 +128,7 @@ print(f"   用途：为最小二乘初始化提供低频约束")
 print("\n🌊 加载真实观测地震数据...")
 # 观测地震数据：直接加载野外观测的地震数据
 print("   📂 加载PSTM地震数据文件...")
-segy_seismic = _read_segy("../data/PSTM_resample1_lf_extension2.sgy")
+segy_seismic = _read_segy("data/PSTM_resample1_lf_extension2.sgy")
 S_obs = []
 for i in range(0, len(segy_seismic.traces)):
     S_obs.append(segy_seismic.traces[i].data)
@@ -161,7 +162,7 @@ print("📍 定义已知测井位置...")
 if not USE_FULL_DATA:
     # CPU模式：使用适合缩减网格的井位
     print("   💻 CPU模式：使用适配的井位配置")
-    well_pos = [[10, 50], [20, 150], [30, 200], [40, 100]]  # 适合(50, 251)网格的井位
+    well_pos = [[10, 10], [20, 20], [30, 30], [40, 40]]  # 适合(50, 251)网格的井位
 else:
     # GPU模式：使用原始完整井位
     print("   🖥️  GPU模式：使用完整井位配置")
@@ -660,7 +661,7 @@ if Train:
             batch_count += 1
         
         # 输出训练进度
-        if i % 10 == 0:
+        if i % 2 == 0:
             avg_total = epoch_loss / batch_count
             avg_sup = epoch_loss_sup / batch_count
             avg_unsup = epoch_loss_unsup / batch_count
@@ -674,12 +675,12 @@ if Train:
     print(f"✅ 阶段2完成：UNet阻抗反演训练")
     
     # 保存模型
-    save_path = 'Uet_TV_IMP_7labels_channel3.pth'
+    save_path = 'logs/model/Uet_TV_IMP_7labels_channel3.pth'
     torch.save(net.state_dict(), save_path)
     print(f"💾 UNet模型已保存: {save_path}")
     
     # 保存Forward网络（子波学习网络）
-    forward_save_path = 'forward_net_wavelet_learned.pth'
+    forward_save_path = 'logs/model/forward_net_wavelet_learned.pth'
     torch.save(forward_net.state_dict(), forward_save_path)
     print(f"💾 Forward网络已保存: {forward_save_path}")
     print(f"   说明：Forward网络包含训练时学习的最优子波参数")
@@ -694,13 +695,13 @@ if not Train:
     print("="*80)
     
     # 加载预训练模型
-    save_path = 'Uet_TV_IMP_7labels_channel3.pth'
+    save_path = 'logs/model/Uet_TV_IMP_7labels_channel3.pth'
     net.load_state_dict(torch.load(save_path, map_location=device))
     net.eval()
     print(f"✅ UNet模型加载完成: {save_path}")
     
     # 加载预训练的Forward网络（子波学习网络）
-    forward_save_path = 'forward_net_wavelet_learned.pth'
+    forward_save_path = 'logs/model/forward_net_wavelet_learned.pth'
     try:
         forward_net.load_state_dict(torch.load(forward_save_path, map_location=device))
         forward_net.eval()
@@ -768,7 +769,8 @@ if not Train:
     all_pred = []
     all_true = []
     all_input = []
-    all_back = []  # 新增：收集低频背景阻抗
+    all_back = []  # 收集低频背景阻抗
+    all_sesimic=[]  ##收集观测地震数据
     with torch.no_grad():
         for batch_idx, (test_S_obs, test_Z_full, test_Z_back, test_Z_true) in enumerate(Test_loader):
             datarn = torch.matmul(WW.T, test_S_obs - torch.matmul(WW, test_Z_back))
@@ -780,8 +782,10 @@ if not Train:
             all_true.append(test_Z_full.cpu().numpy())
             all_input.append(test_S_obs.cpu().numpy())
             all_back.append(test_Z_back.cpu().numpy())  # 新增
+            all_sesimic.append(test_S_obs.cpu().numpy())
             print(f"   处理批次 {batch_idx + 1}/{len(Test_loader)}")
     print("✅ 测试完成")
+    
     # 拼成3D体 [N, 1, time, space] -> [N, time, space]
     all_pred = np.concatenate(all_pred, axis=0)
     all_true = np.concatenate(all_true, axis=0)
@@ -791,20 +795,25 @@ if not Train:
     all_true = np.squeeze(all_true, axis=1)
     all_input = np.squeeze(all_input, axis=1)
     all_back = np.squeeze(all_back, axis=1)  # 新增
+    all_sesimic = np.squeeze(all_sesimic, axis=1)  # 新增
     # 反归一化
     all_pred_imp = np.exp(all_pred * (logimpmax - logimpmin) + logimpmin)
     all_true_imp = np.exp(all_true * (logimpmax - logimpmin) + logimpmin)
     all_back_imp = np.exp(all_back * (logimpmax - logimpmin) + logimpmin)
+    ##对地震数据单独归一化
+    all_sesimic = (all_sesimic - all_sesimic.min()) / (all_sesimic.max() - all_sesimic.min())
     # 保存为3D体
     print(f"\n💾 保存推理结果3D数据...")
-    np.save('prediction_sample.npy', all_pred)
-    np.save('true_sample.npy', all_true)
-    np.save('input_sample.npy', all_input)
-    np.save('prediction_impedance.npy', all_pred_imp)
-    np.save('true_impedance.npy', all_true_imp)
-    np.save('background_impedance.npy', all_back_imp)  # 新增
-    print(f"   ✅ 推理3D数据已保存: prediction_impedance.npy, true_impedance.npy 等 shape: {all_pred_imp.shape}")
-    print(f"   ✅ 低频背景阻抗已保存: background_impedance.npy shape: {all_back.shape}")
+    np.save('logs/results/prediction_sample.npy', all_pred)
+    np.save('logs/results/true_sample.npy', all_true)
+    np.save('logs/results/input_sample.npy', all_input)
+    np.save('logs/results/seismic_record.npy', all_sesimic)
+    
+    np.save('logs/results/prediction_impedance.npy', all_pred_imp)
+    np.save('logs/results/true_impedance.npy', all_true_imp)
+    np.save('logs/results/background_impedance.npy', all_back_imp)  # 新增
+    print(f"   ✅ 推理3D数据已保存: logs/results/prediction_impedance.npy, logs/results/true_impedance.npy 等 shape: {all_pred_imp.shape}")
+    print(f"   ✅ 低频背景阻抗已保存: logs/results/background_impedance.npy shape: {all_back.shape}")
     print("\n" + "="*80)
     print("🎉 程序执行完成")
     print("="*80)

@@ -11,4 +11,4 @@ __MACOSX*
 *npy
 seisvis/dist
 
-results/
+logs/

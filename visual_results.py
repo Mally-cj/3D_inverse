@@ -5,7 +5,6 @@ from seisvis.plot2d import Seis2DPlotter
 from seisvis.plot_config import PlotConfig
 import torch
 import sys
-sys.path.append('/Users/chenjie53/Documents/3D_inverse/3D_inverse/deep_learning_impedance_inversion_chl')
 from seisvis import plot1d
 
 ##判断当前环境是cpu还是gpu
@@ -14,11 +13,11 @@ if torch.cuda.is_available():
 else:
     USE_FULL_DATA = False
 
-# 加载3D低频背景阻抗，真实阻抗，预测阻抗
-back_imp = np.load('background_impedance.npy')
-true_imp = np.load('true_impedance.npy')
-pred_imp = np.load('prediction_impedance.npy')  # shape: (N, T, S)
-
+# 加载3D低频背景阻抗，真实阻抗，预测阻抗，地震数据
+back_imp = np.load('logs/results/background_impedance.npy')
+true_imp = np.load('logs/results/true_impedance.npy')
+pred_imp = np.load('logs/results/prediction_impedance.npy')  # shape: (N, T, S)
+seismic = np.load('logs/results/seismic_record.npy')  # shape: (N, T, S)
 
 
 
@@ -29,7 +28,7 @@ else:
     basex = 450
     basey = 212
     pos = [[594,295], [572,692], [591,996], [532,1053], [603,1212], [561,842], [504,846], [499,597]]
-    well_positions = [[y-basey, x-basex] for [x, y] in pos]
+    well_positions = [[x-basex, y-basey] for [x, y] in pos]
 
 
 
@@ -43,6 +42,8 @@ def plot_inline_sections_with_wells(pred_imp, true_imp, well_positions, save_dir
     cube.add_property('True', true_imp)
     for i, (inline, xline) in enumerate(well_positions):
         # 取该井的纵向曲线（time方向），用true_imp
+        ##打印true_imp的shape
+        print("true_imp.shape:", true_imp.shape)
         if 0 <= inline < true_imp.shape[0] and 0 <= xline < true_imp.shape[2]:
             well_log = true_imp[inline, :, xline].reshape(-1, 1)
         else:
@@ -117,7 +118,7 @@ plot_well_curves_seisvis(true_imp, pred_imp, well_positions, back_imp=back_imp, 
 
 
 
-def plot_multiple_inlines_group_by_wells_seisvis(back_imp, true_imp, pred_imp, well_positions, save_dir='results'):
+def plot_multiple_inlines_group_by_wells_seisvis(back_imp, true_imp, pred_imp, seismic, well_positions, save_dir='results'):
     """
     使用seisvis库，按井所在inline分为4组，每组分别画低频背景、真实阻抗、预测阻抗，每个属性单独保存为1个png
     """
@@ -145,6 +146,8 @@ def plot_multiple_inlines_group_by_wells_seisvis(back_imp, true_imp, pred_imp, w
             # 构造DataCube
             cube = DataCube()
             cube.add_property(prop_name, prop_data)
+            # 这里的意思是：对于当前inline上的每一口井，提取该井在true_imp（真实阻抗）数据中的井曲线（即该井所在inline和xline位置的所有深度/时间点的阻抗值），
+            # 并将其reshape成列向量（n_samples, 1），用于后续作为井数据添加到DataCube中。
             for k, (w_inline, w_xline) in wells_in_inline:
                 well_log = true_imp[w_inline, :, w_xline].reshape(-1, 1)
                 cube.add_well(f'Well-{k+1}', {'log': well_log, 'coord': (w_inline, w_xline)})
@@ -163,9 +166,9 @@ def plot_multiple_inlines_group_by_wells_seisvis(back_imp, true_imp, pred_imp, w
             )
     print(f'✅ 每个inline分组的剖面图（Background/True/Predicted）已分别保存到{save_dir}目录（seisvis版）')
 
-# 调用新函数，按井inline分组画4组（每组3列：背景/真实/预测），每组单独保存，使用seisvis
+# 调用新函数，按井inline分组画4组（每组4列：背景/真实/预测/地震），每组单独保存，使用seisvis
 plot_multiple_inlines_group_by_wells_seisvis(
-    back_imp, true_imp, pred_imp, well_positions,
+    back_imp, true_imp, pred_imp, seismic, well_positions,
     save_dir='results'
 )
 
@@ -185,7 +188,7 @@ def plot_grouped_inlines_matplotlib(back_imp, true_imp, pred_imp, well_positions
         'True': true_imp,
         'Predicted': pred_imp
     }
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
+    fig, axes = plt.subplots(1, 4, figsize=(15, 5), sharey=True)
     t_dim = back_imp.shape[1]
     x_dim = back_imp.shape[2]
     ims = []
@@ -228,5 +231,5 @@ def plot_grouped_inlines_matplotlib(back_imp, true_imp, pred_imp, well_positions
 plot_grouped_inlines_matplotlib(
     back_imp, true_imp, pred_imp, well_positions,
     inline=10,
-    save_path='results/grouped_inline_10.png'
+    save_path='logs/results/grouped_inline_10.png'
 )
