@@ -159,7 +159,7 @@ def generate_well_mask(well_positions, grid_shape, radius=15, sigma=5):
   $$ R_k = \frac{Z_{k+1} - Z_k}{Z_{k+1} + Z_k} $$
 - 物理意义：描述地震波在不同地层界面处的反射强度，是地震记录的主要成因。
 - 线性近似（小对比）：
-  $$ R_k \approx 0.5 \cdot \frac{Z_{k+1} - Z_k}{Z_k} $$
+  $$R_k \approx 0.5 \cdot \frac{Z_{k+1} - Z_k}{Z_k}$$
 
 #### 3. 地震记录（Seismic Trace, $S$）
 - 由反射系数序列$R$与子波$w$卷积得到：
@@ -217,12 +217,7 @@ def generate_well_mask(well_positions, grid_shape, radius=15, sigma=5):
   - 修改 `run.py` 中的 `Train = True/False`。
 - **可视化报错？**
   - 检查 `logs/` 目录下是否有推理结果。
-
 ---
 
-## 5. 参考
-
-- 主要数学原理与实现细节详见本README及代码注释。
-- 如需进一步了解地震反演理论、半监督学习、物理约束神经网络等，可参考地球物理与深度学习相关文献。
 
 
