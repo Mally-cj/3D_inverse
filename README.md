@@ -85,7 +85,7 @@ python visual_results.py
 #### 阶段一：子波学习（ForwardNet）
 - 目标：利用井位高可信度区域，学习最优子波 $w_{learned}$
 - 数学模型：
-  $$ L_{wavelet} = \| M \odot [F(\nabla Z_{full}, w)] - M \odot S_{obs} \|^2 $$
+  $$L_{wavelet} = \| M \odot [F(\nabla Z_{full}, w)] - M \odot S_{obs} \|^2$$
 - 代码片段：
 ```python
 # 井位掩码M，完整阻抗Z_full，观测地震S_obs
@@ -97,9 +97,9 @@ loss_wavelet = mse(M * synthetic, M * S_obs)
 - 目标：利用学习到的子波和低频背景，反演全空间阻抗
 - 数学模型：
   - 最小二乘初始化：
-    $$ Z_{init} = \arg\min_Z \| W \nabla Z - (S_{obs} - W \nabla Z_{back}) \|^2 + \epsilon \|Z\|^2 $$
+    $$Z_{init} = \arg\min_Z \| W \nabla Z - (S_{obs} - W \nabla Z_{back}) \|^2 + \epsilon \|Z\|^2$$
   - UNet残差学习：
-    $$ Z_{pred} = UNet([Z_{init}, S_{obs}]) + Z_{init} $$
+    $$Z_{pred} = UNet([Z_{init}, S_{obs}]) + Z_{init}$$
 - 代码片段：
 ```python
 # 最小二乘初始化
@@ -163,10 +163,10 @@ def generate_well_mask(well_positions, grid_shape, radius=15, sigma=5):
 
 #### 3. 地震记录（Seismic Trace, $S$）
 - 由反射系数序列$R$与子波$w$卷积得到：
-  $$ S = w * R + n $$
+  $$S = w * R + n$$
   其中$*$为卷积，$n$为噪声。
 - 结合阻抗表达：
-  $$ S = w * \nabla Z + n $$
+  $$S = w * \nabla Z + n$$
   其中$\nabla Z$为阻抗差分（近似反射系数）。
 
 #### 4. 低频背景阻抗（Low-frequency Background, $Z_{back}$）
@@ -180,7 +180,7 @@ def generate_well_mask(well_positions, grid_shape, radius=15, sigma=5):
   3. $S_{syn}$与观测地震$S_{obs}$对比，优化模型参数
 
 - 公式链路：
-  $$ Z \xrightarrow{\nabla} R \xrightarrow{*w} S $$
+  $$Z \xrightarrow{\nabla} R \xrightarrow{*w} S$$
 
 #### 6. 代码与公式对应
 - 差分算子：
