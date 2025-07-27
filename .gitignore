@@ -12,3 +12,4 @@ __MACOSX*
 seisvis/dist
 
 logs/
+results/

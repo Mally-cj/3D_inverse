@@ -152,19 +152,44 @@ def generate_gaussian_weighted_matrix(m, n, ones_columns, sigma):
     return matrix
 
 
-def wavelet_init(syn, nw):
-    dataf = torch.fft.fft(syn.permute(0, 1, 3, 2) - syn.mean(), dim=3)
-    dataf_mean = torch.mean(torch.abs(dataf), dim=-2)[:, :, None, :]
-    dataf_mean = average_smoothing(dataf_mean, 3)
-    dataf_mean = dataf_mean / torch.max(dataf_mean, dim=3, keepdim=True)[0]
-    dataif = torch.fft.ifft(dataf_mean, dim=3)
-    dataif = torch.real(torch.fft.ifftshift(dataif, dim=3))
-    wave = dataif / torch.max(dataif, dim=3, keepdim=True)[0]
-    wave = torch.mean(wave, dim=0, keepdim=True)[..., None].permute(0, 4, 3, 2, 1)
+def DIFFZ(z, device=None, dtype=None):
+    """
+    计算阻抗的空间梯度，得到反射系数
+    输入: z - 阻抗数据 [batch, channel, time, space]
+    输出: DZ - 反射系数 [batch, channel, time, space]
+    """
+    if device is None:
+        device = z.device
+    if dtype is None:
+        dtype = z.dtype
+    DZ = torch.zeros([z.shape[0], z.shape[1], z.shape[2], z.shape[3]], device=device, dtype=dtype)
+    DZ[..., :-1, :] = 0.5 * (z[..., 1:, :] - z[..., :-1, :])
+    return DZ
 
-    wavelet =  wave[:, :, int(wave.shape[2] / 2) - nw // 2:int(wave.shape[2] / 2) + nw // 2 + 1, :]
+def tv_loss(x, alfa):
+    """
+    总变分正则化损失，保持空间连续性
+    输入: x - 预测阻抗 [batch, channel, time, space]
+          alfa - 正则化权重
+    输出: TV损失值
+    """
+    dh = torch.abs(x[..., :, 1:] - x[..., :, :-1])    # 水平梯度
+    dw = torch.abs(x[..., 1:, :] - x[..., :-1, :])    # 垂直梯度
+    return alfa * torch.mean(2*dh[..., :-1, :] + dw[..., :, :-1])
 
-    return wavelet
+def wavelet_init(wavelet_length):
+    """
+    从地震数据估计初始子波
+    输入: seismic_data - 地震数据
+          wavelet_length - 子波长度
+    输出: 估计的初始子波
+    """
+
+    dt = 0.001
+    t = np.arange(wavelet_length) * dt
+    f0 = 30  # 主频30Hz
+    wav = (1 - 2*np.pi**2*f0**2*t**2) * np.exp(-np.pi**2*f0**2*t**2)
+    return torch.tensor(wav, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
 
 
 def average_smoothing(signal, kernel_size):
