@@ -5,6 +5,7 @@
 
 import os
 import pickle
+import pdb
 import hashlib
 import numpy as np
 import torch
@@ -19,7 +20,7 @@ from cpp_to_py import generate_well_mask as generate_well_mask2
 from cpp_to_py import get_wellline_and_mask as get_wellline_and_mask2
 from Model.utils import image2cols
 from Model.joint_well import add_labels
-
+import data_tools as tools
 
 class SeismicDataProcessor:
     """
@@ -45,26 +46,20 @@ class SeismicDataProcessor:
             self.device = torch.device(device)
         
         # 根据设备自动调整参数
-        if self.device.type == 'cuda':
-            self.dtype = torch.cuda.FloatTensor
-            self.config = {
-                'USE_FULL_DATA': True,
-                'MAX_SPATIAL_SLICES': 251,
-                'BATCH_SIZE': 10,
-                'PATCH_SIZE': 70,
-                'N_WELL_PROFILES': 30,
-                'MAX_TRAIN_SAMPLES': None
-            }
-        else:
-            self.dtype = torch.FloatTensor
-            self.config = {
-                'USE_FULL_DATA': False,
-                'MAX_SPATIAL_SLICES': 50,
-                'BATCH_SIZE': 1,
-                'PATCH_SIZE': 48,
-                'N_WELL_PROFILES': 10,
-                'MAX_TRAIN_SAMPLES': 300
-            }
+        # if self.device.type == 'cuda':
+        self.dtype = torch.cuda.FloatTensor
+        self.config = {
+            'BATCH_SIZE': 10,
+            'PATCH_SIZE': 70,
+            'N_WELL_PROFILES': 30
+        }
+        # else:
+        #     self.dtype = torch.FloatTensor
+        #     self.config = {
+        #         'BATCH_SIZE': 1,
+        #         'PATCH_SIZE': 48,
+        #         'N_WELL_PROFILES': 10
+        #     }
         
         # 数据缓存
         self._data_cache = {}
@@ -110,8 +105,8 @@ class SeismicDataProcessor:
             impedance_model_full: 完整阻抗数据
         """
         cache_key = self._get_cache_key("impedance", 
-                                      full_data=self.config['USE_FULL_DATA'],
-                                      max_slices=self.config['MAX_SPATIAL_SLICES'])
+                                      full_data=True,
+                                      max_slices=251)
         
         # 尝试从缓存加载
         cached_data = self._load_from_cache(cache_key)
@@ -130,8 +125,7 @@ class SeismicDataProcessor:
         ).transpose(2, 1, 0)
         
         # 根据设备配置调整数据大小
-        if not self.config['USE_FULL_DATA']:
-            impedance_model_full = impedance_model_full[:, :self.config['MAX_SPATIAL_SLICES'], :]
+        impedance_model_full = impedance_model_full
         
         impedance_model_full = np.log(impedance_model_full)
         
@@ -190,8 +184,8 @@ class SeismicDataProcessor:
             S_obs: 观测地震数据
         """
         cache_key = self._get_cache_key("seismic", 
-                                      full_data=self.config['USE_FULL_DATA'],
-                                      max_slices=self.config['MAX_SPATIAL_SLICES'])
+                                      full_data=True,
+                                      max_slices=251)
         
         # 尝试从缓存加载
         cached_data = self._load_from_cache(cache_key)
@@ -208,8 +202,7 @@ class SeismicDataProcessor:
         S_obs = np.array(S_obs).reshape(251, len(S_obs)//251, 601).transpose(2, 1, 0)
         
         # 根据设备配置调整数据大小
-        if not self.config['USE_FULL_DATA']:
-            S_obs = S_obs[:, :self.config['MAX_SPATIAL_SLICES'], :]
+        S_obs = S_obs
         
         # 保存到缓存
         self._save_to_cache(cache_key, S_obs)
@@ -231,7 +224,7 @@ class SeismicDataProcessor:
         """
         cache_key = self._get_cache_key("well_mask", 
                                       shape=S_obs.shape[1:3],
-                                      full_data=self.config['USE_FULL_DATA'])
+                                      full_data=True)
         
         # 尝试从缓存加载
         cached_data = self._load_from_cache(cache_key)
@@ -246,14 +239,9 @@ class SeismicDataProcessor:
         basey = 212
         
         # 定义井位
-        if not self.config['USE_FULL_DATA']:
-            print("   💻 CPU模式：使用适配的井位配置")
-            well_pos = [[10, 10], [20, 20], [30, 30], [40, 40]]
-        else:
-            print("   🖥️  GPU模式：使用完整井位配置")
-            pos = [[594,295], [572,692], [591,996], [532,1053], 
-                   [603,1212], [561,842], [504,846], [499,597]]
-            well_pos = [[y-basey, x-basex] for [x, y] in pos]
+        pos = [[594,295], [572,692], [591,996], [532,1053], 
+               [603,1212], [561,842], [504,846], [499,597]]
+        well_pos = [[y-basey, x-basex] for [x, y] in pos]
         
         # 生成井位掩码
         grid_shape = S_obs.shape[1:3]
@@ -441,7 +429,7 @@ class SeismicDataProcessor:
 
    
 
-    def build_test_patches_regular(self, S_obs, Z_back, impedance_model_full, patch_size, oversize=100, axis=0):
+    def build_test_patches_regular(self, S_obs, Z_back, impedance_model_full, patch_size, oversize=70, axis=0):
         """
         沿axis方向滑窗切patch，另一个空间轴全保留。
         axis=0: x方向滑窗（inline），axis=1: y方向滑窗（xline）
@@ -452,6 +440,8 @@ class SeismicDataProcessor:
         patches, zback_patches, imp_patches, indices = [], [], [], []
         slide_len = spatial_shape[axis]
         keep_len = spatial_shape[1-axis]
+        
+        # 生成滑窗位置和对应的indices
         for start in range(0, slide_len - patch_size + 1, oversize):
             end = start + patch_size
             slc = [slice(None)] * 3
@@ -462,7 +452,14 @@ class SeismicDataProcessor:
             patches.append(torch.tensor(patch, dtype=torch.float32))
             zback_patches.append(torch.tensor(zback_patch, dtype=torch.float32))
             imp_patches.append(torch.tensor(imp_patch, dtype=torch.float32))
-            indices.append(start)
+            
+            # 为每个patch记录实际位置
+            for j in range(keep_len):
+                if axis == 0:
+                    indices.append((start, j))  # x方向滑窗，y=j
+                else:
+                    indices.append((j, start))  # y方向滑窗，x=j
+        
         # [N, time, patch_size, keep_len] -> [N, keep_len, time, patch_size]
         patches = torch.stack(patches).permute(0, 3, 1, 2)
         zback_patches = torch.stack(zback_patches).permute(0, 3, 1, 2)
@@ -471,19 +468,20 @@ class SeismicDataProcessor:
         patches = patches.reshape(-1, time, patch_size)
         zback_patches = zback_patches.reshape(-1, time, patch_size)
         imp_patches = imp_patches.reshape(-1, time, patch_size)
-        indices = [(i, j) for i in range(N) for j in range(keep_len)]
         patches = patches.unsqueeze(1)
         zback_patches = zback_patches.unsqueeze(1)
         imp_patches = imp_patches.unsqueeze(1)
         shape3d = (n_time, n_x, n_y)
         return patches, zback_patches, imp_patches, indices, shape3d
 
-    def process_test_data(self, axis=0,batch_size=1200):
+    def process_test_data(self, axis=0,batch_size=1200,oversize = 70,test_number=None):
         """
         返回测试patch loader、patch索引、shape3d、归一化参数，支持方向选择
         axis: 0(x方向滑窗/inline) 或 1(y方向滑窗/xline)
         """
+        self.test_number=test_number
         impedance_model_full = self.load_impedance_data()
+        tools.single_imshow(impedance_model_full[0])
         Z_back = self.generate_low_frequency_background(impedance_model_full)
         S_obs = self.load_seismic_data()
         logimpmax = impedance_model_full.max()
@@ -492,33 +490,44 @@ class SeismicDataProcessor:
         Z_back_norm = (Z_back - logimpmin) / (logimpmax - logimpmin)
         Z_full_norm = (impedance_model_full - logimpmin) / (logimpmax - logimpmin)
         patch_size = self.config['PATCH_SIZE']
-        oversize = 5
+        self.test_axis=0
         patches, zback_patches, imp_patches, indices, shape3d = self.build_test_patches_regular(
-            S_obs_norm, Z_back_norm, Z_full_norm, patch_size, oversize, axis=axis
+            S_obs_norm, Z_back_norm, Z_full_norm, patch_size, oversize, axis=self.test_axis
         )
+        if test_number is None:
+            test_number = len(patches)
         test_loader = data.DataLoader(
-            data.TensorDataset(patches, imp_patches, zback_patches),
+            data.TensorDataset(patches[:test_number], imp_patches[:test_number], zback_patches[:test_number]),
             batch_size=batch_size, shuffle=False
         )
         normalization_params = {'logimpmax': logimpmax, 'logimpmin': logimpmin}
         return test_loader, indices, shape3d, normalization_params
 
-    def reconstruct_3d_from_patches(self, pred_patches, indices, shape3d, patch_size, axis=0):
+    def reconstruct_3d_from_patches(self, pred_patches, indices):
         """
-        pred_patches: [N*, 1, time, patch_size] (numpy.ndarray or torch.Tensor)
+        pred_patches: patch列表 
         indices: [(i, j)]
-        shape3d: (n_time, n_x, n_y)
-        axis: 0(x方向滑窗) or 1(y方向滑窗)
         """
-        n_time, n_x, n_y = shape3d
-        volume = np.zeros(shape3d)
-        count = np.zeros(shape3d)
+        # 获取patch尺寸
+        n_time = pred_patches[0].shape[0]
+        patch_size = pred_patches[0].shape[1]
+        indices=indices[:self.test_number]
+
+        # 根据indices推断空间尺寸
+        if self.test_axis == 0:
+            max_i = max(idx[0] for idx in indices) + patch_size
+            max_j = max(idx[1] for idx in indices) + 1
+        else:
+            max_i = max(idx[0] for idx in indices) + 1
+            max_j = max(idx[1] for idx in indices) + patch_size
+        n_x, n_y = max_i, max_j
+        
+        volume = np.zeros((n_time, n_x, n_y))
+        count = np.zeros((n_time, n_x, n_y))
+        
         for idx, (i, j) in enumerate(indices):
-            patch = pred_patches[idx, 0]  # [time, patch_size]
-            # patch 现在可能是 numpy 或 torch.Tensor
-            if hasattr(patch, 'numpy'):
-                patch = patch.numpy()
-            if axis == 0:
+            patch = pred_patches[idx]  # [time, patch_size]
+            if self.test_axis == 0:
                 # x方向滑窗，y=j
                 volume[:, i:i+patch_size, j] += patch
                 count[:, i:i+patch_size, j] += 1
@@ -533,13 +542,31 @@ if __name__ == "__main__":
     """测试数据处理模块"""
     # 创建数据处理器
     processor = SeismicDataProcessor(cache_dir='cache')    
-    train_loader, normalization_params, data_info = processor.process_train_data()
-    test_loader, _, _, norm_params = processor.process_test_data()
+    # train_loader, normalization_params, data_info = processor.process_train_data()
+    test_loader, indices, shape3d, norm_params = processor.process_test_data()
+    impedance_model_full = processor.load_impedance_data()
+    Z_back = processor.generate_low_frequency_background(impedance_model_full)
+    S_obs = processor.load_seismic_data()
+    logimpmax = impedance_model_full.max()
+    logimpmin = impedance_model_full.min()
+    S_obs_norm = 2 * (S_obs - S_obs.min()) / (S_obs.max() - S_obs.min()) - 1
+    Z_back_norm = (Z_back - logimpmin) / (logimpmax - logimpmin)
+    Z_full_norm = (impedance_model_full - logimpmin) / (logimpmax - logimpmin)
+    patch_size = processor.config['PATCH_SIZE']
+    processor.test_axis=0
+    patches, zback_patches, imp_patches, indices, shape3d = processor.build_test_patches_regular(
+        S_obs_norm, Z_back_norm, Z_full_norm, patch_size, oversize=70, axis=0
+    )
+    # %%
+    # tools.single_imshow(impedance_model_full[:,:,0])
+    # tools.single_imshow(Z_back[:,:,0])
+    # tools.single_imshow(S_obs[:,:,0])
+    # %%
     ##打印数据信息
-    print(f"\n📊 数据处理结果:")
-    print(f"   - 阻抗数据形状: {data_info['impedance_shape']}")
-    print(f"   - 地震数据形状: {data_info['seismic_shape']}")
-    print(f"   - 井位数量: {len(data_info['well_positions'])}")
-    print(f"   - 训练批数: {len(train_loader)}")
-    print(f"   - 测试批数: {len(test_loader)}")
-    print(f"   - 归一化参数: {norm_params}")
+    # print(f"\n📊 数据处理结果:")
+    # print(f"   - 阻抗数据形状: {data_info['impedance_shape']}")
+    # print(f"   - 地震数据形状: {data_info['seismic_shape']}")
+    # print(f"   - 井位数量: {len(data_info['well_positions'])}")
+    # print(f"   - 训练批数: {len(train_loader)}")
+    # print(f"   - 测试批数: {len(test_loader)}")
+    # print(f"   - 归一化参数: {norm_params}")
