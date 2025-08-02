@@ -35,7 +35,7 @@ else:
     print("井位相对坐标 (inline_idx, xline_idx):", well_positions)
 
 
-def plot_well_curves_seisvis(true_imp, pred_imp, well_positions, back_imp=None, save_dir='results'):
+def plot_well_curves_seisvis(true_imp, pred_imp, well_positions, back_imp=None, save_dir='logs/results'):
     """
     用seisvis画每口井的真实/预测/低频背景曲线对比
     
@@ -243,11 +243,15 @@ def plot_sections_with_wells(pred_imp, true_imp, back_imp,well_positions, seismi
     size = [0, pred_imp.shape[2]-1, 0, pred_imp.shape[1]-1, pred_imp.shape[0]-1, 0]
     plotter2d = Seis2DPlotter(cube, size, config)
 
+    ##求pred，true，back的vmin，vmax
+    vmin = min(np.nanmin(pred_imp), np.nanmin(true_imp), np.nanmin(back_imp))
+    vmax = max(np.nanmax(pred_imp), np.nanmax(true_imp), np.nanmax(back_imp))
+    
     # 显示配置
-    show_pred = {'type': 'Predicted', 'cmap': 'AI', 'clip':(0,1), 'mask': False, 'bar': True}
-    show_true = {'type': 'True', 'cmap': 'AI', 'clip': (0,1), 'mask': False, 'bar': True}
-    show_back = {'type': 'Background', 'cmap': 'AI', 'clip': (0,1), 'mask': False, 'bar': True}
-    wells_type = {'type': [f'Well-{i+1}' for i in range(len(well_positions))], 'cmap': 'AI', 'clip': (0,1), 'width': 4}
+    show_pred = {'type': 'Predicted', 'cmap': 'AI', 'clip':(vmin,vmax), 'mask': False, 'bar': True}
+    show_true = {'type': 'True', 'cmap': 'AI', 'clip': (vmin,vmax), 'mask': False, 'bar': True}
+    show_back = {'type': 'Background', 'cmap': 'AI', 'clip': (vmin,vmax), 'mask': False, 'bar': True}
+    wells_type = {'type': [f'Well-{i+1}' for i in range(len(well_positions))], 'cmap': 'AI', 'clip': (vmin,vmax), 'width': 4}
     show_seismic = {'type': 'Seismic', 'cmap': 'Grey_scales', 'clip': 'robust', 'mask': False, 'bar': True}
     
     os.makedirs(save_dir, exist_ok=True)
@@ -273,7 +277,7 @@ def plot_sections_with_wells(pred_imp, true_imp, back_imp,well_positions, seismi
                 title_define=f'{imp_type.title()} Impedance ({section_type.title()} {section_idx})'
             )
         
-        break
+        # break
     
     print(f'✅ {section_type}方向剖面图已保存到{save_dir}目录')
 

@@ -49,8 +49,8 @@ class SeismicDataProcessor:
         # if self.device.type == 'cuda':
         self.dtype = torch.cuda.FloatTensor
         self.config = {
-            'BATCH_SIZE': 10,
-            'PATCH_SIZE': 70,
+            'BATCH_SIZE': 60,
+            'PATCH_SIZE': 120,
             'N_WELL_PROFILES': 30
         }
         # else:
@@ -474,7 +474,7 @@ class SeismicDataProcessor:
         shape3d = (n_time, n_x, n_y)
         return patches, zback_patches, imp_patches, indices, shape3d
 
-    def process_test_data(self, axis=0,batch_size=1200,oversize = 70,test_number=None):
+    def process_test_data(self, axis=0,batch_size=500,oversize = 70,test_number=None):
         """
         返回测试patch loader、patch索引、shape3d、归一化参数，支持方向选择
         axis: 0(x方向滑窗/inline) 或 1(y方向滑窗/xline)

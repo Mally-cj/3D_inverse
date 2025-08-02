@@ -4,11 +4,15 @@
 """
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # 使用物理第1张卡（第二张卡）
+import torch
+print(f"可见的GPU数量: {torch.cuda.device_count()}")
+print(f"当前GPU名称: {torch.cuda.get_device_name(0)}")
+print(f"当前GPU索引: {torch.cuda.current_device()}")
 import sys
 import torch.optim
 from Model.net2D import UNet, forward_model
-from Model.utils import DIFFZ, tv_loss, wavelet_init
+from Model.utils import DIFFZ, tv_loss, wavelet_init, save_stage1_loss_data, save_stage2_loss_data, save_complete_training_loss
 import matplotlib.pyplot as plt
 import numpy as np
 import pylops
@@ -144,7 +148,12 @@ if Train:
     mu = 5e-4      # TV正则化权重
     beta = 0       # 额外监督损失权重
     size = data_info['seismic_shape'][0]
-    
+    ##按照时间年月日时分秒命名文件夹
+
+    from datetime import datetime
+    save_dir = f'logs/model/'+datetime.now().strftime("%Y%m%d-%H:%M:%S")+'/'
+    os.makedirs(save_dir, exist_ok=True)
+
     # 优化器
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
     optimizerF = torch.optim.Adam(forward_net.parameters(), lr=lr)
@@ -203,6 +212,9 @@ if Train:
         if i % 20 == 0:
             print(f"   Epoch {i:04d}/{admm_iter:04d}, 子波矫正损失: {avg_loss:.6f}")
             print(f"      说明：损失越小，ForwardNet输出的矫正子波在高可信度区域拟合观测数据越好")
+    
+    # 保存阶段1的loss数据
+    save_stage1_loss_data(save_dir, total_lossF, admm_iter)
     # 提取矫正后的子波
     print("🎯 提取ForwardNet矫正后的子波...")
     with torch.no_grad():
@@ -241,6 +253,13 @@ if Train:
     PP = torch.matmul(WW.T, WW) + epsI * torch.eye(WW.shape[0], device=device) ##最小二乘解的Toplitz矩阵的装置
     admm_iter1 = ADMM_ITER1
     print(f"开始UNet反演训练 (共{admm_iter1}轮)...")
+    
+    # 初始化阶段2的loss记录列表
+    stage2_total_loss = []
+    stage2_sup_loss = []
+    stage2_unsup_loss = []
+    stage2_tv_loss = []
+    
     for i in range(admm_iter1):
         epoch_loss = 0
         epoch_loss_sup = 0
@@ -282,21 +301,38 @@ if Train:
             epoch_loss_unsup += loss_unsup.item()
             epoch_loss_tv += loss_tv.item()
             batch_count += 1
+        
+        # 记录每个epoch的平均损失
+        avg_total = epoch_loss / batch_count
+        avg_sup = epoch_loss_sup / batch_count
+        avg_unsup = epoch_loss_unsup / batch_count
+        avg_tv = epoch_loss_tv / batch_count
+        
+        stage2_total_loss.append(avg_total)
+        stage2_sup_loss.append(avg_sup)
+        stage2_unsup_loss.append(avg_unsup)
+        stage2_tv_loss.append(avg_tv)
+        
         if i % 2 == 0:
-            avg_total = epoch_loss / batch_count
-            avg_sup = epoch_loss_sup / batch_count
-            avg_unsup = epoch_loss_unsup / batch_count
-            avg_tv = epoch_loss_tv / batch_count
             print(f"   Epoch {i:04d}/{admm_iter1:04d}")
             print(f"      总损失: {avg_total:.6f}")
             print(f"      井约束损失: {avg_sup:.6f} (高可信度区域匹配)")
             print(f"      物理约束损失: {avg_unsup:.6f} (正演一致性)")
             print(f"      TV正则化损失: {avg_tv:.6f} (空间平滑性)")
+            save_path = os.path.join(save_dir, f'Uet_TV_IMP_7labels_channel3_epoch={i}.pth')
+            torch.save(net.state_dict(), save_path)
+            print(f"💾 UNet模型已保存: {save_path}")
+
+    # 保存阶段2的loss数据
+    save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss, 
+                         stage2_unsup_loss, stage2_tv_loss, admm_iter1)
+    
+    # 保存完整训练过程loss对比图
+    save_complete_training_loss(save_dir, total_lossF, stage2_total_loss, 
+                               stage2_sup_loss, stage2_unsup_loss, stage2_tv_loss, 
+                               admm_iter, admm_iter1)
+
     print(f"✅ 阶段2完成：UNet阻抗反演训练")
-    # 保存模型
-    save_path = 'logs/model/Uet_TV_IMP_7labels_channel3.pth'
-    torch.save(net.state_dict(), save_path)
-    print(f"💾 UNet模型已保存: {save_path}")
     # 保存Forward网络（子波矫正器）
     forward_save_path = 'logs/model/forward_net_wavelet_learned.pth'
     torch.save(forward_net.state_dict(), forward_save_path)
@@ -312,7 +348,8 @@ elif not Train:
     print("="*80)
     
     # 加载预训练模型
-    save_path = 'logs/model/Uet_TV_IMP_7labels_channel3.pth'
+    save_path = 'logs/model/20250727-17:44:58/Uet_TV_IMP_7labels_channel3_epoch=10.pth'
+    # save_path = 'logs/model/Uet_TV_IMP_7labels_channel3_epoch=40.pth'
     net.load_state_dict(torch.load(save_path, map_location=device))
     net.eval()
     print(f"✅ UNet模型加载完成: {save_path}")
