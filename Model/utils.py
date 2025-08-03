@@ -204,23 +204,22 @@ def average_smoothing(signal, kernel_size):
     return smoothed_signal
 
 
-def save_stage1_loss_data(save_dir, total_lossF, admm_iter):
+def save_stage1_loss_data(save_dir, total_lossF):
     """
     保存阶段1（子波矫正器）的loss数据并生成可视化图表
     
     Args:
         save_dir: 保存目录路径
         total_lossF: 阶段1的loss列表
-        admm_iter: 训练轮次
     """
     # 保存loss数据
     stage1_loss_data = {
-        'epochs': list(range(admm_iter)),
+        'epochs': list(range(len(total_lossF))),
         'wavelet_loss': total_lossF
     }
     np.save(os.path.join(save_dir, 'stage1_loss_data.npy'), stage1_loss_data)
     plt.figure(figsize=(10, 6))
-    plt.plot(range(admm_iter), total_lossF, 'b-', linewidth=2, label='Wavelet Correction Loss')
+    plt.plot(range(len(total_lossF)), total_lossF, 'b-', linewidth=2, label='Wavelet Correction Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss Value')
     plt.title('Stage 1: Wavelet Correction Training Loss')
@@ -233,7 +232,7 @@ def save_stage1_loss_data(save_dir, total_lossF, admm_iter):
     print(f"📊 Stage 1 loss plot saved: {save_dir}/stage1_wavelet_loss.png")
 
 def save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss, 
-                         stage2_unsup_loss, stage2_tv_loss, admm_iter1):
+                         stage2_unsup_loss, stage2_tv_loss):
     """
     保存阶段2（UNet阻抗反演）的loss数据并生成可视化图表
     
@@ -246,8 +245,9 @@ def save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss,
         admm_iter1: 训练轮次
     """
     # 保存loss数据
+    epoch_number=len(stage2_total_loss)
     stage2_loss_data = {
-        'epochs': list(range(admm_iter1)),
+        'epochs': list(range(epoch_number)),
         'total_loss': stage2_total_loss,
         'supervised_loss': stage2_sup_loss,
         'unsupervised_loss': stage2_unsup_loss,
@@ -260,7 +260,7 @@ def save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss,
     
     # 子图1：总损失
     plt.subplot(2, 2, 1)
-    plt.plot(range(admm_iter1), stage2_total_loss, 'r-', linewidth=2, label='Total Loss')
+    plt.plot(range(epoch_number), stage2_total_loss, 'r-', linewidth=2, label='Total Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss Value')
     plt.title('Stage 2: UNet Inversion Total Loss')
@@ -269,9 +269,9 @@ def save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss,
     
     # 子图2：各项损失对比
     plt.subplot(2, 2, 2)
-    plt.plot(range(admm_iter1), stage2_sup_loss, 'g-', linewidth=2, label='Supervised Loss')
-    plt.plot(range(admm_iter1), stage2_unsup_loss, 'b-', linewidth=2, label='Unsupervised Loss')
-    plt.plot(range(admm_iter1), stage2_tv_loss, 'orange', linewidth=2, label='TV Regularization Loss')
+    plt.plot(range(epoch_number), stage2_sup_loss, 'g-', linewidth=2, label='Supervised Loss')
+    plt.plot(range(epoch_number), stage2_unsup_loss, 'b-', linewidth=2, label='Unsupervised Loss')
+    plt.plot(range(epoch_number), stage2_tv_loss, 'orange', linewidth=2, label='TV Regularization Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss Value')
     plt.title('Stage 2: Loss Comparison')
@@ -280,7 +280,7 @@ def save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss,
     
     # 子图3：井约束损失
     plt.subplot(2, 2, 3)
-    plt.plot(range(admm_iter1), stage2_sup_loss, 'g-', linewidth=2, label='Supervised Loss')
+    plt.plot(range(epoch_number), stage2_sup_loss, 'g-', linewidth=2, label='Supervised Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss Value')
     plt.title('Supervised Loss (Well Constraint)')
@@ -289,7 +289,7 @@ def save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss,
     
     # 子图4：物理约束损失
     plt.subplot(2, 2, 4)
-    plt.plot(range(admm_iter1), stage2_unsup_loss, 'b-', linewidth=2, label='Unsupervised Loss')
+    plt.plot(range(epoch_number), stage2_unsup_loss, 'b-', linewidth=2, label='Unsupervised Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss Value')
     plt.title('Unsupervised Loss (Forward Consistency)')
@@ -305,8 +305,7 @@ def save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss,
 
 
 def save_complete_training_loss(save_dir, total_lossF, stage2_total_loss, 
-                               stage2_sup_loss, stage2_unsup_loss, stage2_tv_loss, 
-                               admm_iter, admm_iter1):
+                               stage2_sup_loss, stage2_unsup_loss, stage2_tv_loss):
     """
     保存完整训练过程（阶段1+阶段2）的loss对比图
     
@@ -322,6 +321,8 @@ def save_complete_training_loss(save_dir, total_lossF, stage2_total_loss,
     """
     plt.figure(figsize=(15, 6))
     
+    admm_iter=len(total_lossF)
+    admm_iter1=len(stage2_total_loss)
     # 阶段1损失
     plt.subplot(1, 2, 1)
     plt.plot(range(admm_iter), total_lossF, 'b-', linewidth=2, label='Wavelet Correction Loss')

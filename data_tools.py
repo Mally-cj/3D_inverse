@@ -26,6 +26,17 @@ from scipy.stats import pearsonr
 # import sklearn
 matplotlib.rc("font",family='WenQuanYi Micro Hei')
 
+import threading
+from functools import wraps
+
+
+def run_in_thread(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        thread = threading.Thread(target=func, args=args, kwargs=kwargs)
+        thread.start()
+        return thread  # 返回线程对象以便跟踪
+    return wrapper
 
 
 class PDFManager:

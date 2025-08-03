@@ -8,6 +8,8 @@ import sys
 from seisvis import plot1d
 import pdb
 import matplotlib.pyplot as plt
+import data_tools as tools
+from data_tools import run_in_thread
 
 ##判断当前环境是cpu还是gpu
 if torch.cuda.is_available():
@@ -35,7 +37,7 @@ else:
     print("井位相对坐标 (inline_idx, xline_idx):", well_positions)
 
 
-def plot_well_curves_seisvis(true_imp, pred_imp, well_positions, back_imp=None, save_dir='logs/results'):
+def plot_well_curves_seisvis(true_imp, pred_imp, well_pos, back_imp=None, save_dir='logs/results'):
     """
     用seisvis画每口井的真实/预测/低频背景曲线对比
     
@@ -46,6 +48,8 @@ def plot_well_curves_seisvis(true_imp, pred_imp, well_positions, back_imp=None, 
         back_imp: 低频背景阻抗数据，shape (time, CMP, inline)
         save_dir: 保存目录
     """
+    if well_pos is None:
+        well_pos=well_positions
     config1d = PlotConfig()
     config1d.label_fontsize = 14
     config1d.tick_labelsize = 12
@@ -53,7 +57,7 @@ def plot_well_curves_seisvis(true_imp, pred_imp, well_positions, back_imp=None, 
     plotter1d = plot1d.Seis1DPlotter(config1d)
     os.makedirs(save_dir, exist_ok=True)
     
-    for i, (inline_idx, xline_idx) in enumerate(well_positions):
+    for i, (inline_idx, xline_idx) in enumerate(well_pos):
         if 0 <= inline_idx < true_imp.shape[2] and 0 <= xline_idx < true_imp.shape[1]:
             # 提取井曲线：固定inline和xline位置，取所有时间点的值
             true_curve = true_imp[:, xline_idx, inline_idx].flatten()
@@ -84,7 +88,7 @@ def plot_well_curves_seisvis(true_imp, pred_imp, well_positions, back_imp=None, 
 
 
 # 新增：画每口井的1D曲线对比（含低频背景）
-plot_well_curves_seisvis(true_imp, pred_imp, well_positions, back_imp=back_imp, save_dir='results')
+# plot_well_curves_seisvis(true_imp, pred_imp, well_positions, back_imp=back_imp, save_dir='results')
 
 def plot_multiple_inlines_group_by_wells_seisvis(back_imp, true_imp, pred_imp, seismic, well_positions, save_dir='results'):
     """
@@ -214,7 +218,7 @@ def plot_grouped_inlines_matplotlib(back_imp, true_imp, pred_imp, well_positions
 #     inline_idx=10,
 #     save_path='logs/results/grouped_inline_10.png')
 
-def plot_sections_with_wells(pred_imp, true_imp, back_imp,well_positions, seismic, section_type='inline', save_dir='results'):
+def plot_sections_with_wells(pred_imp, true_imp, back_imp,seismic, well_pos=None,section_type='inline', save_dir='results'):
     """
     构造DataCube并画指定方向的剖面，剖面上自动镶嵌井曲线
     
@@ -227,13 +231,16 @@ def plot_sections_with_wells(pred_imp, true_imp, back_imp,well_positions, seismi
     """
     # 构造DataCube
     cube = DataCube()
-    cube.add_property('Predicted', pred_imp)
-    cube.add_property('True', true_imp)
-    cube.add_property('Seismic', seismic) 
-    cube.add_property('Background', back_imp)
+    cube.add_property('Predicted', pred_imp.transpose(2, 1, 0))  # 转换为 (inline, xline, time) 形状
+    cube.add_property('True', true_imp.transpose(2, 1, 0))
+    cube.add_property('Seismic', seismic.transpose(2, 1, 0))
+    cube.add_property('Background', back_imp.transpose(2, 1, 0))
     
+    if well_pos is None:
+        well_pos=well_positions
+
     # 添加井曲线
-    for i, (inline_idx, xline_idx) in enumerate(well_positions):
+    for i, (inline_idx, xline_idx) in enumerate(well_pos):
         if 0 <= inline_idx < true_imp.shape[2] and 0 <= xline_idx < true_imp.shape[1]:
             well_log = true_imp[:, xline_idx, inline_idx].reshape(-1, 1)
             cube.add_well(f'Well-{i+1}', {'log': well_log, 'coord': (inline_idx, xline_idx)})
@@ -251,17 +258,17 @@ def plot_sections_with_wells(pred_imp, true_imp, back_imp,well_positions, seismi
     show_pred = {'type': 'Predicted', 'cmap': 'AI', 'clip':(vmin,vmax), 'mask': False, 'bar': True}
     show_true = {'type': 'True', 'cmap': 'AI', 'clip': (vmin,vmax), 'mask': False, 'bar': True}
     show_back = {'type': 'Background', 'cmap': 'AI', 'clip': (vmin,vmax), 'mask': False, 'bar': True}
-    wells_type = {'type': [f'Well-{i+1}' for i in range(len(well_positions))], 'cmap': 'AI', 'clip': (vmin,vmax), 'width': 4}
-    show_seismic = {'type': 'Seismic', 'cmap': 'Grey_scales', 'clip': 'robust', 'mask': False, 'bar': True}
+    wells_type = {'type': [f'Well-{i+1}' for i in range(len(well_pos))], 'cmap': 'AI', 'clip': (vmin,vmax), 'width': 4}
+    show_seismic = {'type': 'Seismic', 'cmap': 'HorizonCube', 'clip': 'robust', 'mask': False, 'bar': True}
     
     os.makedirs(save_dir, exist_ok=True)
 
     # 获取需要绘制的剖面位置
     if section_type == 'inline':
-        section_positions = list(set([inline_idx for inline_idx, _ in well_positions]))
+        section_positions = list(set([inline_idx for inline_idx, _ in well_pos]))
         x_label = 'CMP'
     else:  # xline
-        section_positions = list(set([xline_idx for _, xline_idx in well_positions]))
+        section_positions = list(set([xline_idx for _, xline_idx in well_pos]))
         x_label = 'Inline'
 
     # 绘制每个剖面
@@ -276,11 +283,11 @@ def plot_sections_with_wells(pred_imp, true_imp, back_imp,well_positions, seismi
                 save_path=f'{save_dir}/well{i}_{imp_type}_{section_type}{section_idx}.png',
                 title_define=f'{imp_type.title()} Impedance ({section_type.title()} {section_idx})'
             )
+        if i> 2: break
         
-        # break
     
     print(f'✅ {section_type}方向剖面图已保存到{save_dir}目录')
 
 # 调用示例
-plot_sections_with_wells(pred_imp, true_imp,back_imp, well_positions, seismic, section_type='inline', save_dir='logs/results')
-plot_sections_with_wells(pred_imp, true_imp,back_imp, well_positions, seismic, section_type='xline', save_dir='logs/results')
+# plot_sections_with_wells(pred_imp, true_imp,back_imp, seismic, well_positions, section_type='inline', save_dir='logs/results')
+# plot_sections_with_wells(pred_imp, true_imp,back_imp,seismic,  well_positions, section_type='xline', save_dir='logs/results')
