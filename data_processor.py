@@ -441,8 +441,12 @@ class SeismicDataProcessor:
         slide_len = spatial_shape[axis]
         keep_len = spatial_shape[1-axis]
 
+        patch_size=min(patch_size,slide_len)
         # 生成滑窗位置和对应的indices
-        for start in range(0, slide_len - patch_size + 1, oversize):
+        start_begin=list(range(0, slide_len - patch_size + 1, oversize))
+        start_begin+=[slide_len-patch_size]
+        
+        for start in start_begin:
             end = start + patch_size
             slc = [slice(None)] * 3
             slc[axis+1] = slice(start, end)
@@ -460,19 +464,11 @@ class SeismicDataProcessor:
                 else:
                     indices.append((j, start))  # y方向滑窗，x=j
 
-        # [N, time, patch_size, keep_len] -> [N, keep_len, time, patch_size]
-        patches = torch.stack(patches).permute(0, 3, 1, 2)
-        zback_patches = torch.stack(zback_patches).permute(0, 3, 1, 2)
-        imp_patches = torch.stack(imp_patches).permute(0, 3, 1, 2)
-        N, keep_len, time, patch_size = patches.shape
-        patches = patches.reshape(-1, time, patch_size)
-        zback_patches = zback_patches.reshape(-1, time, patch_size)
-        imp_patches = imp_patches.reshape(-1, time, patch_size)
-        patches = patches.unsqueeze(1)
-        zback_patches = zback_patches.unsqueeze(1)
-        imp_patches = imp_patches.unsqueeze(1)
+        # 将patch列表堆叠成张量，并统一成 [num_patches, 1, time, patch_size] 形状，方便后续DataLoader使用
+        patches = torch.stack(patches).unsqueeze(1)         # [num_patches, 1, time, patch_size]
+        zback_patches = torch.stack(zback_patches).unsqueeze(1)
+        imp_patches = torch.stack(imp_patches).unsqueeze(1)
         shape3d = (n_time, n_x, n_y)
-        self.test_patch_indices=indices
         return patches, zback_patches, imp_patches, indices, shape3d
 
     def process_test_data(self, axis=0,batch_size=500,patch_size=70,test_number=None):
@@ -508,15 +504,24 @@ class SeismicDataProcessor:
 
         return test_loader, indices, shape3d, normalization_params
 
-    def reconstruct_3d_from_patches(self, pred_patches,indices):
+    def reconstruct_3d_from_patches(self, pred_patches, indices):
         """
         pred_patches: patch列表
         indices: [(i, j)]
         """
+        
+        assert len(pred_patches) == len(indices), "pred_patches 和 indices 长度不匹配"
+            
         # 获取patch尺寸
         n_time = pred_patches[0].shape[0]
         patch_size = pred_patches[0].shape[1]
-        pdb.set_trace()
+        
+        print(f"🔍 重建信息:")
+        print(f"   - pred_patches 数量: {len(pred_patches)}")
+        print(f"   - indices 数量: {len(indices)}")
+        print(f"   - patch 形状: {pred_patches[0].shape}")
+        print(f"   - test_axis: {self.test_axis}")
+        
         # 根据indices推断空间尺寸
         if self.test_axis == 0:
             max_i = max(idx[0] for idx in indices) + patch_size
@@ -559,7 +564,7 @@ if __name__ == "__main__":
     patches, zback_patches, imp_patches, indices, shape3d = processor.build_test_patches_regular(
         S_obs, Z_back, impedance_model_full, patch_size=500, oversize=70, axis=0
     )
-
+    # pdb.set_trace()
     # 拼接
     reconstructed = processor.reconstruct_3d_from_patches(patches)
 

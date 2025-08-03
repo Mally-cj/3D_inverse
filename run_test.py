@@ -16,8 +16,9 @@ device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 ##准备数据
 processor = SeismicDataProcessor(cache_dir='cache', device=device)
-test_loader, indices, shape3d, norm_params = processor.process_test_data(batch_size=100,patch_size=500)
-
+test_loader, xy, shape3d, norm_params = processor.process_test_data(batch_size=100,patch_size=800)
+number_of_patches = len(xy)
+print(f"number_of_patches: {number_of_patches}")
 
 @run_in_thread
 def inference(model_path1=None,model_path2=None,folder_dir='logs/test'):
@@ -82,6 +83,7 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test'):
     true_patch_list = []
     input_patch_list = []
     back_patch_list = []
+    indices_list = []
     seismic_patch_list = []
     logimpmax = norm_params['logimpmax']
     logimpmin = norm_params['logimpmin']
@@ -99,31 +101,24 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test'):
             # 网络推理
             Z_pred = net(torch.cat([Z_init, s_patch], dim=1)) + Z_init
             # 收集patch结果（适配batch>1）
-            Z_pred_np = Z_pred.cpu().numpy()  # [batch, 1, time, patch_size]
-            imp_patch_np = imp_patch.cpu().numpy()
-            zback_patch_np = zback_patch.cpu().numpy()
-            s_patch_np = s_patch.cpu().numpy()
-            # squeeze掉通道维（axis=1），遍历batch
-            Z_pred_np = np.squeeze(Z_pred_np, axis=1)  # [batch, time, patch_size]
-            imp_patch_np = np.squeeze(imp_patch_np, axis=1)
-            zback_patch_np = np.squeeze(zback_patch_np, axis=1)
-            s_patch_np = np.squeeze(s_patch_np, axis=1)
-            for b in range(Z_pred_np.shape[0]):
-                pred_patch_list.append(Z_pred_np[b])
-                true_patch_list.append(imp_patch_np[b])
-                back_patch_list.append(zback_patch_np[b])
-                seismic_patch_list.append(s_patch_np[b])
-                indices.append(indice[b])
-
+            # 直接squeeze和tolist后用extend批量添加，避免for循环
+            Z_pred_np = np.squeeze(Z_pred.cpu().numpy(), axis=1)  # [batch, time, patch_size]
+            imp_patch_np = np.squeeze(imp_patch.cpu().numpy(), axis=1)
+            zback_patch_np = np.squeeze(zback_patch.cpu().numpy(), axis=1)
+            s_patch_np = np.squeeze(s_patch.cpu().numpy(), axis=1)
+            pred_patch_list.extend(list(Z_pred_np))
+            true_patch_list.extend(list(imp_patch_np))
+            back_patch_list.extend(list(zback_patch_np))
+            seismic_patch_list.extend(list(s_patch_np))
+            indices_list.extend(indice.tolist())
             current_patches = len(pred_patch_list)
-            print(f"   处理patch {current_patches}/{len(indices)}")
-    
+            print(f"   处理patch {current_patches}/{number_of_patches}")
     # 3. 拼回3D体
     # print(f"   拼回3D体...") # [N, time, patch_size]
-    pred_3d = processor.reconstruct_3d_from_patches(pred_patch_list, indices)
-    true_3d = processor.reconstruct_3d_from_patches(true_patch_list, indices)
-    back_3d = processor.reconstruct_3d_from_patches(back_patch_list, indices)
-    seismic_3d = processor.reconstruct_3d_from_patches(seismic_patch_list, indices)
+    pred_3d = processor.reconstruct_3d_from_patches(pred_patch_list, indices_list)
+    true_3d = processor.reconstruct_3d_from_patches(true_patch_list, indices_list)
+    back_3d = processor.reconstruct_3d_from_patches(back_patch_list, indices_list)
+    seismic_3d = processor.reconstruct_3d_from_patches(seismic_patch_list, indices_list)
     
     # 4. 反归一化
     # pred_3d_imp = np.exp(pred_3d * (logimpmax - logimpmin) + logimpmin)
@@ -148,7 +143,6 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test'):
     # print("🎉 程序执行完成")
     # print("="*80) 
     
-    pdb.set_trace()
     plot_well_curves_seisvis(true_3d_imp, pred_3d_imp, well_pos=None, back_imp=back_3d_imp, save_dir=folder_dir)
     # plot_well_curves_seisvis(true_imp, pred_imp, well_positions, back_imp=back_imp, save_dir='results')
     plot_sections_with_wells(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, well_pos=None, section_type='inline', save_dir=folder_dir)
@@ -158,9 +152,9 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test'):
     # thread2.join()
 
 
-model_path1 = '/home/shendi_gjh_cj/codes/3D_project/logs/20250803-17-38-42/model/forward_net_wavelet_learned.pth'  # Forward建模网络路径
-model_path2='/home/shendi_gjh_cj/codes/3D_project/logs/20250803-17-38-42/model/Uet_TV_IMP_7labels_channel3_epoch=20.pth'
-inference(model_path1,model_path2,folder_dir='logs/test')
+# model_path1 = '/home/shendi_gjh_cj/codes/3D_project/logs/20250803-17-38-42/model/forward_net_wavelet_learned.pth'  # Forward建模网络路径
+# model_path2='/home/shendi_gjh_cj/codes/3D_project/logs/20250803-17-38-42/model/Uet_TV_IMP_7labels_channel3_epoch=20.pth'
+# inference(model_path1,model_path2,folder_dir='logs/test')
 
 # def visualize_thread(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, folder_dir):
 #     # 可视化结果
