@@ -12,48 +12,79 @@ from functools import wraps
 import pdb
 from data_tools import run_in_thread
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+# device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 ##准备数据
-processor = SeismicDataProcessor(cache_dir='cache', device=device)
-test_loader, xy, shape3d, norm_params = processor.process_test_data(batch_size=100,patch_size=800)
-number_of_patches = len(xy)
-print(f"number_of_patches: {number_of_patches}")
+# processor = SeismicDataProcessor(cache_dir='cache', device=device)
+# test_loader, xy, shape3d, norm_params = processor.process_test_data(batch_size=100,patch_size=800)
+# number_of_patches = len(xy)
+# print(f"number_of_patches: {number_of_patches}")
 
 @run_in_thread
-def inference(model_path1=None,model_path2=None,folder_dir='logs/test'):
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-    # ##准备数据
-    # processor = SeismicDataProcessor(cache_dir='cache', device=device)
-    # test_loader, indices, shape3d, norm_params = processor.process_test_data(batch_size=500,patch_size=500)
-    # print('新开线程执行推理...')
+def inference(model_path1=None,model_path2=None,folder_dir='logs/test',inference_device="cpu", config=None):
+    print('新开线程执行推理...')
+    device = torch.device(inference_device)
+    # inference_device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    processor = SeismicDataProcessor(cache_dir='cache', device=inference_device)
+    test_loader, xy, shape3d, norm_params = processor.process_test_data(batch_size=500,patch_size=120)
+    number_of_patches = len(xy)
+    print(f"number_of_patches: {number_of_patches}")
 
     # 阶段一：Forward建模网络（子波学习）
-    forward_net = forward_model(nonlinearity="tanh").to(device)
+    forward_net = forward_model(nonlinearity=config['forward_nonlinearity']).to(device)
     forward_net.load_state_dict(torch.load(model_path1, map_location=device))
     forward_net.eval()
     
 
     # 阶段二：加载预训练模型
     # save_path = 'logs/model/Uet_TV_IMP_7labels_channel3_epoch=40.pth'
+    # 认为config一定不为None
+
+    
     net = UNet(
-    in_ch=2,                 # 输入通道：[最小二乘初始解, 观测地震数据]
-    out_ch=1,                # 输出通道：阻抗残差
-    channels=[8, 16, 32, 64],
-    skip_channels=[0, 8, 16, 32],
-    use_sigmoid=True,        # 输出归一化到[0,1]
-    use_norm=False
+        in_ch=config['unet_in_channels'],                 # 输入通道：[最小二乘初始解, 观测地震数据]
+        out_ch=config['unet_out_channels'],                # 输出通道：阻抗残差
+        channels=config['unet_channels'],
+        skip_channels=config['unet_skip_channels'],
+        use_sigmoid=config['unet_use_sigmoid'],        # 输出归一化到[0,1]
+        use_norm=config['unet_use_norm']
     ).to(device)
     net.load_state_dict(torch.load(model_path2, map_location=device))
     net.eval()
 
     # 推理阶段：构建子波算子
     # print("🔧 构建推理用子波算子...")
-    wav0 = wavelet_init(101).squeeze().numpy()
+    # 如果没有传入config，使用默认值
+    if config is None:
+        config = {
+            'wavelet_length': 101,
+            'epsI': 0.1,
+            'gaussian_std': 25
+        }
+    
+    wav0 = wavelet_init(config['wavelet_length']).squeeze().numpy()
     wav00=torch.tensor(wav0[None, None, :, None],device=device)
-    size = shape3d[0]
-    nz = size
-    epsI = 0.1
+    # 获取第一个batch的数据来确定维度
+    first_batch = next(iter(test_loader))
+    s_patch_first = first_batch[0]
+    nz = s_patch_first.shape[2]  # 时间维度，与训练时保持一致
+    
+    # 使用与训练时相同的size计算方法
+    # 训练时: size = data_info['seismic_shape'][0]
+    # 这里我们需要从测试数据中获取相同的维度
+    size = s_patch_first.shape[3]  # patch_size，与训练时的patch_size一致
+    
+    print(f"🔍 维度信息:")
+    print(f"   - s_patch_first.shape: {s_patch_first.shape}")
+    print(f"   - shape3d: {shape3d}")
+    print(f"   - nz: {nz}")
+    print(f"   - size: {size}")
+    
+    
+    # 重新创建test_loader，因为我们已经消耗了第一个batch
+    test_loader, xy, shape3d, norm_params = processor.process_test_data(batch_size=500,patch_size=120)
+    number_of_patches = len(xy)
+    epsI = config['epsI']
     S = torch.diag(0.5 * torch.ones(nz - 1), diagonal=1) - torch.diag(0.5 * torch.ones(nz - 1), diagonal=-1)
     S=S.to(device)
     S[0] = S[-1] = 0
@@ -61,7 +92,9 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test'):
     
     wav_learned_np= forward_net(wav00, wav00)[1].detach().cpu().squeeze().numpy()
     N = len(wav_learned_np)
-    std = 25
+    std = config['gaussian_std']
+    print("N",N)
+    print("std",std)
     gaussian_window = gaussian(N, std)
     wav_final = gaussian_window * (wav_learned_np - wav_learned_np.mean())
     wav_final = wav_final / wav_final.max()
@@ -71,6 +104,12 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test'):
     S = S.float()
     WW = WW @ S
     PP = torch.matmul(WW.T, WW) + epsI * torch.eye(WW.shape[0], device=device)
+    
+    print(f"🔍 调试信息:")
+    print(f"   - size: {size}")
+    print(f"   - WW.shape: {WW.shape}")
+    print(f"   - S.shape: {S.shape}")
+    print(f"   - PP.shape: {PP.shape}")
     # print(f"✅ 推理子波算子构建完成:")
     # print(f"   - 子波长度: {len(wav_final)}")
     # print(f"   - 卷积算子形状: {WW.shape}")
@@ -89,10 +128,16 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test'):
     logimpmin = norm_params['logimpmin']
     with torch.no_grad():
         for i, (s_patch, imp_patch, zback_patch,indice ) in enumerate(test_loader):
-            # pdb.set_trace()
             s_patch = s_patch.to(device)
             imp_patch = imp_patch.to(device)
             zback_patch = zback_patch.to(device)
+            
+            if i == 0:  # 只打印第一个batch的信息
+                print(f"🔍 数据形状:")
+                print(f"   - s_patch.shape: {s_patch.shape}")
+                print(f"   - zback_patch.shape: {zback_patch.shape}")
+                print(f"   - imp_patch.shape: {imp_patch.shape}")
+            
             # 最小二乘初始化
             datarn = torch.matmul(WW.T, s_patch - torch.matmul(WW, zback_patch))
             x, _, _, _ = torch.linalg.lstsq(PP[None, None], datarn)
