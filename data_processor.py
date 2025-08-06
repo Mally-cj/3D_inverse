@@ -431,7 +431,7 @@ class SeismicDataProcessor:
 
     def build_test_patches_regular(self, S_obs, Z_back, impedance_model_full, patch_size, oversize=70, axis=0):
         """
-        沿axis方向滑窗切patch，另一个空间轴全保留。
+        沿axis方向滑窗切patch，生成2D剖面与训练数据维度一致。
         axis=0: x方向滑窗（inline），axis=1: y方向滑窗（xline）
         返回: patches, zback_patches, imp_patches, indices, shape3d
         """
@@ -441,42 +441,45 @@ class SeismicDataProcessor:
         slide_len = spatial_shape[axis]
         keep_len = spatial_shape[1-axis]
 
-        patch_size=min(patch_size,slide_len)
-        # 生成滑窗位置和对应的indices
-        start_begin=list(range(0, slide_len - patch_size + 1, oversize))
-        start_begin+=[slide_len-patch_size]
+        patch_size = min(patch_size, slide_len)
+        # 生成滑窗位置
+        start_begin = list(range(0, slide_len - patch_size + 1, oversize))
+        start_begin += [slide_len - patch_size]
         
         for start in start_begin:
-            end = start + patch_size
-            slc = [slice(None)] * 3
-            slc[axis+1] = slice(start, end)
-            patch = S_obs[tuple(slc)]
-            zback_patch = Z_back[tuple(slc)]
-            imp_patch = impedance_model_full[tuple(slc)]
-            patches.append(torch.tensor(patch, dtype=torch.float32))
-            zback_patches.append(torch.tensor(zback_patch, dtype=torch.float32))
-            imp_patches.append(torch.tensor(imp_patch, dtype=torch.float32))
-
-            # 为每个patch记录实际位置
+            # 沿另一个方向生成多个2D剖面
             for j in range(keep_len):
                 if axis == 0:
-                    indices.append((start, j))  # x方向滑窗，y=j
+                    # x方向滑窗，y=j，生成2D剖面 [601, patch_size]
+                    patch = S_obs[:, start:start+patch_size, j]
+                    zback_patch = Z_back[:, start:start+patch_size, j]
+                    imp_patch = impedance_model_full[:, start:start+patch_size, j]
+                    indices.append((start, j))
                 else:
-                    indices.append((j, start))  # y方向滑窗，x=j
-
-        # 将patch列表堆叠成张量，并统一成 [num_patches, 1, time, patch_size] 形状，方便后续DataLoader使用
-        patches = torch.stack(patches).unsqueeze(1)         # [num_patches, 1, time, patch_size]
+                    # y方向滑窗，x=j，生成2D剖面 [601, patch_size]
+                    patch = S_obs[:, j, start:start+patch_size]
+                    zback_patch = Z_back[:, j, start:start+patch_size]
+                    imp_patch = impedance_model_full[:, j, start:start+patch_size]
+                    indices.append((j, start))
+                
+                patches.append(torch.tensor(patch, dtype=torch.float32))
+                zback_patches.append(torch.tensor(zback_patch, dtype=torch.float32))
+                imp_patches.append(torch.tensor(imp_patch, dtype=torch.float32))
+        
+        # 将patch列表堆叠成张量，与训练数据维度一致 [num_patches, 1, time, patch_size]
+        patches = torch.stack(patches).unsqueeze(1)
         zback_patches = torch.stack(zback_patches).unsqueeze(1)
         imp_patches = torch.stack(imp_patches).unsqueeze(1)
+        
         shape3d = (n_time, n_x, n_y)
         return patches, zback_patches, imp_patches, indices, shape3d
 
-    def process_test_data(self, axis=0,batch_size=500,patch_size=70,test_number=None):
+    def process_test_data(self, axis=0, batch_size=500, patch_size=70, test_number=None):
         """
         返回测试patch loader、patch索引、shape3d、归一化参数，支持方向选择
         axis: 0(x方向滑窗/inline) 或 1(y方向滑窗/xline)
         """
-        self.test_number=test_number
+        self.test_number = test_number
         impedance_model_full = self.load_impedance_data()
         tools.single_imshow(impedance_model_full[0])
         Z_back = self.generate_low_frequency_background(impedance_model_full)
@@ -486,35 +489,46 @@ class SeismicDataProcessor:
         S_obs_norm = 2 * (S_obs - S_obs.min()) / (S_obs.max() - S_obs.min()) - 1
         Z_back_norm = (Z_back - logimpmin) / (logimpmax - logimpmin)
         Z_full_norm = (impedance_model_full - logimpmin) / (logimpmax - logimpmin)
-        # patch_size = self.config['PATCH_SIZE']
-        self.test_axis=0
+        
+        # 使用传入的axis参数
+        self.test_axis = axis
         patches, zback_patches, imp_patches, indices, shape3d = self.build_test_patches_regular(
             S_obs_norm, Z_back_norm, Z_full_norm, patch_size, patch_size-10, axis=self.test_axis
         )
+        
         if test_number is None:
             test_number = len(patches)
 
-
         indices_tensor = torch.tensor(indices[:test_number], dtype=torch.int)
         test_loader = data.DataLoader(
-            data.TensorDataset(patches[:test_number], imp_patches[:test_number], zback_patches[:test_number],indices_tensor[:test_number]),
+            data.TensorDataset(patches[:test_number], imp_patches[:test_number], zback_patches[:test_number], indices_tensor[:test_number]),
             batch_size=batch_size, shuffle=False
         )
-        normalization_params = {'logimpmax': logimpmax, 'logimpmin': logimpmin}
+        
+        # 完整的归一化参数
+        normalization_params = {
+            'logimpmax': logimpmax, 
+            'logimpmin': logimpmin,
+            'S_obs_min': S_obs.min(),
+            'S_obs_max': S_obs.max()
+        }
 
         return test_loader, indices, shape3d, normalization_params
 
     def reconstruct_3d_from_patches(self, pred_patches, indices):
         """
-        pred_patches: patch列表
-        indices: [(i, j)]
+        从2D剖面重建3D数据
+        pred_patches: patch列表，每个patch形状为 [time, patch_size]
+        indices: [(i, j)] 位置索引
         """
         
         assert len(pred_patches) == len(indices), "pred_patches 和 indices 长度不匹配"
-            
+        assert len(pred_patches[0].shape) == 2, "pred_patches 形状不正确"
+        
         # 获取patch尺寸
-        n_time = pred_patches[0].shape[0]
-        patch_size = pred_patches[0].shape[1]
+        print("pred_patches[0].shape", pred_patches[0].shape)
+        n_time = pred_patches[0].shape[0]  # 时间维度
+        patch_size = pred_patches[0].shape[1]  # 空间维度
         
         print(f"🔍 重建信息:")
         print(f"   - pred_patches 数量: {len(pred_patches)}")
@@ -536,6 +550,7 @@ class SeismicDataProcessor:
 
         for idx, (i, j) in enumerate(indices):
             patch = pred_patches[idx]  # [time, patch_size]
+            
             if self.test_axis == 0:
                 # x方向滑窗，y=j
                 volume[:, i:i+patch_size, j] += patch
@@ -544,6 +559,7 @@ class SeismicDataProcessor:
                 # y方向滑窗，x=j
                 volume[:, i, j:j+patch_size] += patch
                 count[:, i, j:j+patch_size] += 1
+                
         volume /= np.maximum(count, 1)
         return volume
 

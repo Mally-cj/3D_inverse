@@ -271,7 +271,7 @@ WW = pylops.utils.signalprocessing.convmtx(wav_learned_smooth/wav_learned_smooth
 WW = torch.tensor(WW, dtype=torch.float32, device=device)
 WW = WW @ S.to(device)
 PP = torch.matmul(WW.T, WW) + epsI * torch.eye(WW.shape[0], device=device) ##最小二乘解的Toplitz矩阵的装置
-
+pdb.set_trace()
 print(f"✅ 阶段2完成：UNet阻抗反演训练")
 # 保存Forward网络（子波矫正器）
 forward_save_path= os.path.join(model_save_dir, config['forward_model_filename'])
@@ -321,11 +321,12 @@ for i in range(config['stage2_epoch_number']):
         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=config['max_grad_norm'])
         optimizer.step()
         scheduler.step()
+        batch_size=S_obs_batch.shape[0]
         epoch_loss += total_loss.item()
         epoch_loss_sup += loss_sup.item()
         epoch_loss_unsup += loss_unsup.item()
         epoch_loss_tv += loss_tv.item()
-        batch_count += 1
+        batch_count += batch_size
     
     # 记录每个epoch的平均损失
     avg_total = epoch_loss / batch_count
@@ -348,8 +349,8 @@ for i in range(config['stage2_epoch_number']):
         torch.save(net.state_dict(), model_save_path)
         print(f"💾 UNet模型已保存: {model_save_path}")
         test_save_dir= os.path.join(save_dir, 'test', f'test_epoch={i}')
-        # thread=run_test.inference(model_path1=forward_save_path, model_path2=model_save_path, folder_dir=test_save_dir,inference_device=config['inference_device'], config=config)
-        # threads_inference.append(thread)
+        thread=run_test.inference(model_path1=forward_save_path, model_path2=model_save_path, folder_dir=test_save_dir,inference_device=config['inference_device'], config=config)
+        threads_inference.append(thread)
     
     if i % config['stage2_loss_save_interval'] == 0:
         # 保存阶段2的loss数据
@@ -363,6 +364,6 @@ for i in range(config['stage2_epoch_number']):
                                     )
 
 
-# for thread in threads_inference:
-#     thread.join()  # 等待所有推理线程完成
+for thread in threads_inference:
+    thread.join()  # 等待所有推理线程完成
 

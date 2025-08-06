@@ -7,7 +7,7 @@
     "stage1_epoch_number": 200,
     "stage2_epoch_number": 400,
     "device": "cuda:0",
-    "inference_device": "cuda:0",
+    "inference_device": "cuda:3",
     "wavelet_length": 101,
     "gaussian_std": 25,
     "epsI": 0.1,

@@ -25,10 +25,7 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test',inference
     print('新开线程执行推理...')
     device = torch.device(inference_device)
     # inference_device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-    processor = SeismicDataProcessor(cache_dir='cache', device=inference_device)
-    test_loader, xy, shape3d, norm_params = processor.process_test_data(batch_size=500,patch_size=120)
-    number_of_patches = len(xy)
-    print(f"number_of_patches: {number_of_patches}")
+
 
     # 阶段一：Forward建模网络（子波学习）
     forward_net = forward_model(nonlinearity=config['forward_nonlinearity']).to(device)
@@ -39,8 +36,6 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test',inference
     # 阶段二：加载预训练模型
     # save_path = 'logs/model/Uet_TV_IMP_7labels_channel3_epoch=40.pth'
     # 认为config一定不为None
-
-    
     net = UNet(
         in_ch=config['unet_in_channels'],                 # 输入通道：[最小二乘初始解, 观测地震数据]
         out_ch=config['unet_out_channels'],                # 输出通道：阻抗残差
@@ -52,44 +47,20 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test',inference
     net.load_state_dict(torch.load(model_path2, map_location=device))
     net.eval()
 
-    # 推理阶段：构建子波算子
-    # print("🔧 构建推理用子波算子...")
-    # 如果没有传入config，使用默认值
-    if config is None:
-        config = {
-            'wavelet_length': 101,
-            'epsI': 0.1,
-            'gaussian_std': 25
-        }
     
-    wav0 = wavelet_init(config['wavelet_length']).squeeze().numpy()
-    wav00=torch.tensor(wav0[None, None, :, None],device=device)
-    # 获取第一个batch的数据来确定维度
-    first_batch = next(iter(test_loader))
-    s_patch_first = first_batch[0]
-    nz = s_patch_first.shape[2]  # 时间维度，与训练时保持一致
-    
-    # 使用与训练时相同的size计算方法
-    # 训练时: size = data_info['seismic_shape'][0]
-    # 这里我们需要从测试数据中获取相同的维度
-    size = s_patch_first.shape[3]  # patch_size，与训练时的patch_size一致
-    
-    print(f"🔍 维度信息:")
-    print(f"   - s_patch_first.shape: {s_patch_first.shape}")
-    print(f"   - shape3d: {shape3d}")
-    print(f"   - nz: {nz}")
-    print(f"   - size: {size}")
-    
-    
-    # 重新创建test_loader，因为我们已经消耗了第一个batch
-    test_loader, xy, shape3d, norm_params = processor.process_test_data(batch_size=500,patch_size=120)
+
+    processor = SeismicDataProcessor(cache_dir='cache', device=inference_device)    
+    test_loader, xy, shape3d, norm_params = processor.process_test_data(batch_size=100,patch_size=1000)
     number_of_patches = len(xy)
     epsI = config['epsI']
-    S = torch.diag(0.5 * torch.ones(nz - 1), diagonal=1) - torch.diag(0.5 * torch.ones(nz - 1), diagonal=-1)
+    time_len=shape3d[0]
+
+    S = torch.diag(0.5 * torch.ones(time_len - 1), diagonal=1) - torch.diag(0.5 * torch.ones(time_len - 1), diagonal=-1)
     S=S.to(device)
     S[0] = S[-1] = 0
 
-    
+    wav0 = wavelet_init(config['wavelet_length']).squeeze().numpy()
+    wav00=torch.tensor(wav0[None, None, :, None],device=device)
     wav_learned_np= forward_net(wav00, wav00)[1].detach().cpu().squeeze().numpy()
     N = len(wav_learned_np)
     std = config['gaussian_std']
@@ -98,15 +69,19 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test',inference
     gaussian_window = gaussian(N, std)
     wav_final = gaussian_window * (wav_learned_np - wav_learned_np.mean())
     wav_final = wav_final / wav_final.max()
-    WW = pylops.utils.signalprocessing.convmtx(wav_final, size, len(wav_final) // 2)[:size]
+    
+    time_len=shape3d[0]
+    WW = pylops.utils.signalprocessing.convmtx(wav_final, time_len, len(wav_final) // 2)[:time_len]
     WW = torch.tensor(WW,device=device)
     WW = WW.float()
     S = S.float()
+    # pdb.set_trace()
+    print("WW.shape",WW.shape)
+    print("S.shape",S.shape)
     WW = WW @ S
     PP = torch.matmul(WW.T, WW) + epsI * torch.eye(WW.shape[0], device=device)
-    
+    # pdb.set_trace()
     print(f"🔍 调试信息:")
-    print(f"   - size: {size}")
     print(f"   - WW.shape: {WW.shape}")
     print(f"   - S.shape: {S.shape}")
     print(f"   - PP.shape: {PP.shape}")
@@ -139,6 +114,7 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test',inference
                 print(f"   - imp_patch.shape: {imp_patch.shape}")
             
             # 最小二乘初始化
+            # pdb.set_trace()
             datarn = torch.matmul(WW.T, s_patch - torch.matmul(WW, zback_patch))
             x, _, _, _ = torch.linalg.lstsq(PP[None, None], datarn)
             Z_init = x + zback_patch
@@ -196,16 +172,55 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test',inference
     # thread1.join()
     # thread2.join()
 
+if __name__ == '__main__':
 
-# model_path1 = '/home/shendi_gjh_cj/codes/3D_project/logs/20250803-17-38-42/model/forward_net_wavelet_learned.pth'  # Forward建模网络路径
-# model_path2='/home/shendi_gjh_cj/codes/3D_project/logs/20250803-17-38-42/model/Uet_TV_IMP_7labels_channel3_epoch=20.pth'
-# inference(model_path1,model_path2,folder_dir='logs/test')
+    config={
+            'lr1': 1e-4,   ## 学习率
+            'lr2': 1e-4,   ## Forward网络学习率
+            'sup_coeff': 1,   
+            'tv_coeff': 1,
+            'unsup_coeff':1.0,
+            'stage1_epoch_number': 3,
+            'stage2_epoch_number': 4,
+            'device': 'cuda:0',
+            'inference_device': 'cuda:1',
+            # 模型结构参数
+            'unet_in_channels': 2,
+            'unet_out_channels': 1,
+            'unet_channels': [8, 16, 32, 64],
+            'unet_skip_channels': [0, 8, 16, 32],
+            'unet_use_sigmoid': True,
+            'unet_use_norm': False,
+            'forward_nonlinearity': "tanh",
+            # 训练参数
+            'scheduler_step_size': 30,
+            'scheduler_gamma': 0.9,
+            'max_grad_norm': 1.0,
+            'wavelet_length': 101,
+            'gaussian_std': 25,
+            'epsI': 0.1,
+            'tv_loss_weight': 1.0,
+            'sup_loss_divisor': 3,
+            # 打印和保存间隔
+            'stage1_print_interval': 20,
+            'stage2_print_interval': 10,
+            'stage2_loss_save_interval': 5,
+            'stage2_complete_loss_save_interval': 5,
+            # 文件路径和命名
+            'forward_model_filename': 'forward_net_wavelet_learned.pth',
+            'unet_model_prefix': 'Uet_TV_IMP_7labels_channel3',
+            'cache_dir': 'cache',
+        }
 
-# def visualize_thread(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, folder_dir):
-#     # 可视化结果
-#     plot_sections_with_wells(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, well_pos=None, section_type='inline', save_dir=folder_dir)
-#     plot_sections_with_wells(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, well_pos=None, section_type='xline', save_dir=folder_dir)
+    model_path1 = 'logs/E1-06/model/forward_net_wavelet_learned.pth'  # Forward建模网络路径
+    model_path2='logs/E1-06/model/Uet_TV_IMP_7labels_channel3_epoch=20.pth'
+    inference(model_path1,model_path2,folder_dir='logs/test',config=config)
+
+    # def visualize_thread(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, folder_dir):
+    #     # 可视化结果
+    #     plot_sections_with_wells(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, well_pos=None, section_type='inline', save_dir=folder_dir)
+    #     plot_sections_with_wells(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, well_pos=None, section_type='xline', save_dir=folder_dir)
 
 
 
-# inference()
+    # inference()
