@@ -1,13 +1,13 @@
 {
-    "lr1": 1e-5,
-    "lr2": 1e-5,
-    "sup_coeff": 100.0,
+    "lr1": 1e-4,
+    "lr2": 1e-4,
+    "sup_coeff": 20.0,
     "tv_coeff": 1.0,
-    "unsup_coeff": 10.0,
-    "stage1_epoch_number": 200,
+    "unsup_coeff": 1.0,
+    "stage1_epoch_number": 800,
     "stage2_epoch_number": 400,
-    "device": "cuda:0",
-    "inference_device": "cuda:3",
+    "device": "cuda:1",
+    "inference_device": "cuda:1",
     "wavelet_length": 101,
     "gaussian_std": 25,
     "epsI": 0.1,
@@ -27,8 +27,8 @@
     "data_processor_device": "auto",
     "tv_loss_weight": 1.0,
     "sup_loss_divisor": 3,
-    "stage1_print_interval": 20,
-    "stage2_print_interval": 40,
-    "stage2_loss_save_interval": 5,
-    "stage2_complete_loss_save_interval": 5
+    "stage1_print_interval": 40,
+    "stage2_print_interval": 100,
+    "stage2_loss_save_interval": 10,
+    "stage2_complete_loss_save_interval": 10
 } 

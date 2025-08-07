@@ -670,6 +670,8 @@ class forward_model(nn.Module):
         x = self.cnn(x0)
         x = self.outc(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2) + x0
         # x = self.wavelet(x)
+        # 确保x在正确的设备上
+        x = x.to(y.device)
         y = F.conv2d(y, torch.flip(x, dims=[2]), stride=self.resolution_ratio, padding='same')
         return y, x
 

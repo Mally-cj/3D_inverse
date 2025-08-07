@@ -3,18 +3,6 @@
 使用独立的数据处理模块和缓存机制
 """
 
-import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # 使用物理第1张卡（第二张卡）
-import torch
-print(f"可见的GPU数量: {torch.cuda.device_count()}")
-if torch.cuda.is_available():
-    print(f"当前GPU名称: {torch.cuda.get_device_name(0)}")
-    print(f"当前GPU索引: {torch.cuda.current_device()}")
-else:
-    print("CUDA不可用，将使用CPU")
-
-
-
 import sys
 import torch.optim
 from Model.net2D import UNet, forward_model
@@ -42,12 +30,21 @@ from pathlib import Path
 from data_processor import SeismicDataProcessor
 import run_test
 
+import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # 使用物理第1张卡（第二张卡）
+import torch
+print(f"可见的GPU数量: {torch.cuda.device_count()}")
+if torch.cuda.is_available():
+    print(f"当前GPU名称: {torch.cuda.get_device_name(0)}")
+    print(f"当前GPU索引: {torch.cuda.current_device()}")
+else:
+    print("CUDA不可用，将使用CPU")
+
+
+
 
 PROJECT_DIR = Path(__file__).parent.resolve()
 print(f"项目目录: {PROJECT_DIR}")    ##使用多线程，不用绝对目录会乱
-
-
-
 
 
 ##如果传入配置文件，则从配置文件中读取config
@@ -69,8 +66,8 @@ else:
         'unsup_coeff':1.0,
         'stage1_epoch_number': 3,
         'stage2_epoch_number': 4,
-        'device': 'cuda:0',
-        'inference_device': 'cuda:1',
+        'device': 'auto',  # 改为auto，让系统自动选择
+        'inference_device': 'auto',  # 改为auto，让系统自动选择
         # 模型结构参数
         'unet_in_channels': 2,
         'unet_out_channels': 1,
@@ -271,7 +268,10 @@ WW = pylops.utils.signalprocessing.convmtx(wav_learned_smooth/wav_learned_smooth
 WW = torch.tensor(WW, dtype=torch.float32, device=device)
 WW = WW @ S.to(device)
 PP = torch.matmul(WW.T, WW) + epsI * torch.eye(WW.shape[0], device=device) ##最小二乘解的Toplitz矩阵的装置
-pdb.set_trace()
+##把PP，WW保存为npz文件
+PP_WW_path=os.path.join(save_dir, 'PP_WW.npz')
+np.savez(PP_WW_path, PP=PP.cpu().numpy(), WW=WW.cpu().numpy())
+
 print(f"✅ 阶段2完成：UNet阻抗反演训练")
 # 保存Forward网络（子波矫正器）
 forward_save_path= os.path.join(model_save_dir, config['forward_model_filename'])
@@ -333,11 +333,15 @@ for i in range(config['stage2_epoch_number']):
     avg_sup = epoch_loss_sup / batch_count
     avg_unsup = epoch_loss_unsup / batch_count
     avg_tv = epoch_loss_tv / batch_count
-    
     stage2_total_loss.append(avg_total)
     stage2_sup_loss.append(avg_sup)
     stage2_unsup_loss.append(avg_unsup)
     stage2_tv_loss.append(avg_tv)
+
+    # stage2_total_loss.append(np.log10(avg_total+1))
+    # stage2_sup_loss.append(np.log10(avg_sup+1))
+    # stage2_unsup_loss.append(np.log10(avg_unsup+1))
+    # stage2_tv_loss.append(np.log10(avg_tv+1))
     
     if i % config['stage2_print_interval'] == 0:
         print(f"   Epoch {i:04d}/{config['stage2_epoch_number']:04d}")
@@ -349,7 +353,11 @@ for i in range(config['stage2_epoch_number']):
         torch.save(net.state_dict(), model_save_path)
         print(f"💾 UNet模型已保存: {model_save_path}")
         test_save_dir= os.path.join(save_dir, 'test', f'test_epoch={i}')
-        thread=run_test.inference(model_path1=forward_save_path, model_path2=model_save_path, folder_dir=test_save_dir,inference_device=config['inference_device'], config=config)
+        thread=run_test.inference(
+            model_path1=forward_save_path, model_path2=model_save_path, 
+        folder_dir=test_save_dir,inference_device=config['inference_device'], 
+        config=config,PP_WW_path=PP_WW_path)
+        
         threads_inference.append(thread)
     
     if i % config['stage2_loss_save_interval'] == 0:

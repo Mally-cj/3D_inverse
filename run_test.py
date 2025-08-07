@@ -21,7 +21,7 @@ from data_tools import run_in_thread
 # print(f"number_of_patches: {number_of_patches}")
 
 @run_in_thread
-def inference(model_path1=None,model_path2=None,folder_dir='logs/test',inference_device="cpu", config=None):
+def inference(model_path1=None,model_path2=None,folder_dir='logs/test',inference_device="cpu", config=None,PP_WW_path=None):
     print('新开线程执行推理...')
     device = torch.device(inference_device)
     # inference_device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
@@ -50,47 +50,15 @@ def inference(model_path1=None,model_path2=None,folder_dir='logs/test',inference
     
 
     processor = SeismicDataProcessor(cache_dir='cache', device=inference_device)    
-    test_loader, xy, shape3d, norm_params = processor.process_test_data(batch_size=100,patch_size=1000)
+    test_loader, xy, shape3d, norm_params = processor.process_test_data(batch_size=10,patch_size=1400)
     number_of_patches = len(xy)
     epsI = config['epsI']
     time_len=shape3d[0]
 
-    S = torch.diag(0.5 * torch.ones(time_len - 1), diagonal=1) - torch.diag(0.5 * torch.ones(time_len - 1), diagonal=-1)
-    S=S.to(device)
-    S[0] = S[-1] = 0
-
-    wav0 = wavelet_init(config['wavelet_length']).squeeze().numpy()
-    wav00=torch.tensor(wav0[None, None, :, None],device=device)
-    wav_learned_np= forward_net(wav00, wav00)[1].detach().cpu().squeeze().numpy()
-    N = len(wav_learned_np)
-    std = config['gaussian_std']
-    print("N",N)
-    print("std",std)
-    gaussian_window = gaussian(N, std)
-    wav_final = gaussian_window * (wav_learned_np - wav_learned_np.mean())
-    wav_final = wav_final / wav_final.max()
-    
-    time_len=shape3d[0]
-    WW = pylops.utils.signalprocessing.convmtx(wav_final, time_len, len(wav_final) // 2)[:time_len]
-    WW = torch.tensor(WW,device=device)
-    WW = WW.float()
-    S = S.float()
-    # pdb.set_trace()
-    print("WW.shape",WW.shape)
-    print("S.shape",S.shape)
-    WW = WW @ S
-    PP = torch.matmul(WW.T, WW) + epsI * torch.eye(WW.shape[0], device=device)
-    # pdb.set_trace()
-    print(f"🔍 调试信息:")
-    print(f"   - WW.shape: {WW.shape}")
-    print(f"   - S.shape: {S.shape}")
-    print(f"   - PP.shape: {PP.shape}")
-    # print(f"✅ 推理子波算子构建完成:")
-    # print(f"   - 子波长度: {len(wav_final)}")
-    # print(f"   - 卷积算子形状: {WW.shape}")
-    # print(f"   - 子波类型: {'学习的子波' if use_learned_wavelet else '初始子波'}")
-    # print("🔍 开始测试patch推理...")
-    # 1. 获取patch loader、索引、shape、归一化参数
+    ##加载PP，WW
+    PP_WW = np.load(PP_WW_path)
+    PP = torch.tensor(PP_WW['PP'],device=device)
+    WW = torch.tensor(PP_WW['WW'],device=device)
     
     # 2. 推理循环
     pred_patch_list = []
@@ -182,8 +150,8 @@ if __name__ == '__main__':
             'unsup_coeff':1.0,
             'stage1_epoch_number': 3,
             'stage2_epoch_number': 4,
-            'device': 'cuda:0',
-            'inference_device': 'cuda:1',
+            'device': 'auto',  # 改为auto，让系统自动选择
+            'inference_device': 'auto',  # 改为auto，让系统自动选择
             # 模型结构参数
             'unet_in_channels': 2,
             'unet_out_channels': 1,
@@ -212,9 +180,9 @@ if __name__ == '__main__':
             'cache_dir': 'cache',
         }
 
-    model_path1 = 'logs/E1-06/model/forward_net_wavelet_learned.pth'  # Forward建模网络路径
-    model_path2='logs/E1-06/model/Uet_TV_IMP_7labels_channel3_epoch=20.pth'
-    inference(model_path1,model_path2,folder_dir='logs/test',config=config)
+    # model_path1 = 'logs/E1-06/model/forward_net_wavelet_learned.pth'  # Forward建模网络路径
+    # model_path2='logs/E1-06/model/Uet_TV_IMP_7labels_channel3_epoch=20.pth'
+    # inference(model_path1,model_path2,folder_dir='logs/test',config=config)
 
     # def visualize_thread(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, folder_dir):
     #     # 可视化结果

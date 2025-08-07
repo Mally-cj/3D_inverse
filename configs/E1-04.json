@@ -28,7 +28,7 @@
     "tv_loss_weight": 1.0,
     "sup_loss_divisor": 3,
     "stage1_print_interval": 20,
-    "stage2_print_interval": 10,
+    "stage2_print_interval": 40,
     "stage2_loss_save_interval": 5,
     "stage2_complete_loss_save_interval": 5
 } 

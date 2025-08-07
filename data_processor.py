@@ -42,24 +42,27 @@ class SeismicDataProcessor:
         # 设备配置
         if device == 'auto':
             self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        elif isinstance(device, str) and device.startswith('cuda:'):
+            # 如果指定了具体的GPU，直接使用
+            self.device = torch.device(device)
         else:
             self.device = torch.device(device)
 
         # 根据设备自动调整参数
-        # if self.device.type == 'cuda':
-        self.dtype = torch.cuda.FloatTensor
-        self.config = {
-            'BATCH_SIZE': 60,
-            'PATCH_SIZE': 120,
-            'N_WELL_PROFILES': 30
-        }
-        # else:
-        #     self.dtype = torch.FloatTensor
-        #     self.config = {
-        #         'BATCH_SIZE': 1,
-        #         'PATCH_SIZE': 48,
-        #         'N_WELL_PROFILES': 10
-        #     }
+        if self.device.type == 'cuda':
+            self.dtype = torch.cuda.FloatTensor
+            self.config = {
+                'BATCH_SIZE': 60,
+                'PATCH_SIZE': 120,
+                'N_WELL_PROFILES': 30
+            }
+        else:
+            self.dtype = torch.FloatTensor
+            self.config = {
+                'BATCH_SIZE': 1,
+                'PATCH_SIZE': 48,
+                'N_WELL_PROFILES': 10
+            }
 
         # 数据缓存
         self._data_cache = {}
@@ -399,12 +402,18 @@ class SeismicDataProcessor:
         Z_back_norm = (training_data['Z_back_train_set'] - logimpmin) / (logimpmax - logimpmin)
 
         # 7. 创建训练数据加载器
+        # 将数据移动到指定设备
+        S_obs_norm = torch.tensor(S_obs_norm, dtype=torch.float32, device=self.device)
+        Z_full_norm = torch.tensor(Z_full_norm, dtype=torch.float32, device=self.device)
+        Z_back_norm = torch.tensor(Z_back_norm, dtype=torch.float32, device=self.device)
+        M_mask_train_set = torch.tensor(training_data['M_mask_train_set'], dtype=torch.float32, device=self.device)
+        
         train_loader = data.DataLoader(
             data.TensorDataset(
                 S_obs_norm,
                 Z_full_norm,
                 Z_back_norm,
-                training_data['M_mask_train_set']
+                M_mask_train_set
             ),
             batch_size=self.config['BATCH_SIZE'],
             shuffle=True
