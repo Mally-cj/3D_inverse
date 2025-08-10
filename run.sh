@@ -7,8 +7,8 @@ if [ ! -d "$CONFIG_DIR" ]; then
   exit 1
 fi
 
-for config_file in "$CONFIG_DIR"/E2*.json; do
-  [ -f "$config_file" ] || { echo "No E2*.json files found in $CONFIG_DIR"; break; }
+for config_file in "$CONFIG_DIR"/E5*.json; do
+  [ -f "$config_file" ] || { echo "No E5*.json files found in $CONFIG_DIR"; break; }
   echo "Running training with config: $config_file"
   python train.py "$config_file" || echo "Error occurred with config: $config_file"
 done

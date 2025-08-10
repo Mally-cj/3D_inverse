@@ -18,7 +18,7 @@ import sys
 sys.path.append('deep_learning_impedance_inversion_chl')
 from cpp_to_py import generate_well_mask as generate_well_mask2
 from cpp_to_py import get_wellline_and_mask as get_wellline_and_mask2
-from Model.utils import image2cols
+from utils import image2cols
 from Model.joint_well import add_labels
 import data_tools as tools
 
@@ -28,7 +28,7 @@ class SeismicDataProcessor:
     支持数据加载、预处理、缓存和训练数据构建
     """
 
-    def __init__(self, cache_dir='cache', device='auto'):
+    def __init__(self, cache_dir='cache', device=None,type='train'):
         """
         初始化数据处理器
 
@@ -39,30 +39,23 @@ class SeismicDataProcessor:
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
 
-        # 设备配置
-        if device == 'auto':
-            self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        elif isinstance(device, str) and device.startswith('cuda:'):
-            # 如果指定了具体的GPU，直接使用
-            self.device = torch.device(device)
-        else:
-            self.device = torch.device(device)
+
+        if device is not None:
+            self.set_device(device)
 
         # 根据设备自动调整参数
         if self.device.type == 'cuda':
             self.dtype = torch.cuda.FloatTensor
+        
+
+
+        if type == 'train':
             self.config = {
                 'BATCH_SIZE': 60,
                 'PATCH_SIZE': 120,
                 'N_WELL_PROFILES': 30
             }
-        else:
-            self.dtype = torch.FloatTensor
-            self.config = {
-                'BATCH_SIZE': 1,
-                'PATCH_SIZE': 48,
-                'N_WELL_PROFILES': 10
-            }
+
 
         # 数据缓存
         self._data_cache = {}
@@ -72,6 +65,19 @@ class SeismicDataProcessor:
         print(f"   - 设备: {self.device}")
         print(f"   - 缓存目录: {cache_dir}")
         print(f"   - 配置: {self.config}")
+    def get_device(self):
+        ##如果存在self.device，则返回self.device，否则提示要set_device
+        if hasattr(self, 'device'):
+            return self.device
+        else:
+            raise ValueError("请先设置设备 self.set_device()")
+
+    def set_device(self,device):
+        self.device = torch.device(device)
+        if self.device.type == 'cuda':
+            self.dtype = torch.cuda.FloatTensor
+        else:
+            self.dtype = torch.FloatTensor
 
     def _get_cache_key(self, data_type, **kwargs):
         """生成缓存键"""
@@ -345,25 +351,26 @@ class SeismicDataProcessor:
                 M_mask_profiles[i], (S_obs.shape[0], patchsize), (1, oversize)
             )))
 
-        # 拼接所有训练块
-        Z_back_train_set = torch.cat(Z_back_patches, 0)[..., None].permute(0, 3, 1, 2).type(self.dtype)
-        Z_full_train_set = torch.cat(Z_full_patches, 0)[..., None].permute(0, 3, 1, 2).type(self.dtype)
-        S_obs_train_set = torch.cat(S_obs_patches, 0)[..., None].permute(0, 3, 1, 2).type(self.dtype)
-        M_mask_train_set = torch.cat(M_mask_patches, 0)[..., None].permute(0, 3, 1, 2).type(self.dtype)
+        # 把列表内容拼接成numpy，列表中的内容是163*601*120*120，拼接后是5553*1*601*120
+        Z_back_patches_np = np.concatenate(Z_back_patches, axis=0)[..., None].transpose(0, 3, 1, 2)
+        Z_full_patches_np = np.concatenate(Z_full_patches, axis=0)[..., None].transpose(0, 3, 1, 2)
+        S_obs_patches_np = np.concatenate(S_obs_patches, axis=0)[..., None].transpose(0, 3, 1, 2)
+        M_mask_patches_np = np.concatenate(M_mask_patches, axis=0)[..., None].transpose(0, 3, 1, 2)
+
 
         training_data = {
-            'Z_back_train_set': Z_back_train_set,
-            'Z_full_train_set': Z_full_train_set,
-            'S_obs_train_set': S_obs_train_set,
-            'M_mask_train_set': M_mask_train_set
+            'Z_back_train_set': Z_back_patches_np,
+            'Z_full_train_set': Z_full_patches_np,
+            'S_obs_train_set': S_obs_patches_np,
+            'M_mask_train_set': M_mask_patches_np
         }
 
         # 保存到缓存
         self._save_to_cache(cache_key, training_data)
 
         print(f"✅ 训练剖面数据构建完成:")
-        print(f"   - 训练样本总数: {len(S_obs_train_set)}")
-        print(f"   - 每个样本大小: {S_obs_train_set.shape[2]}×{S_obs_train_set.shape[3]}")
+        print(f"   - 训练样本总数: {training_data['Z_back_train_set'].shape[0]}")
+        print(f"   - 每个样本大小: {training_data['Z_back_train_set'].shape[2]}×{training_data['Z_back_train_set'].shape[3]}")
 
         return training_data
 
@@ -380,11 +387,12 @@ class SeismicDataProcessor:
         print("\n" + "="*80)
         print("🚀 开始训练数据处理流程")
         print("="*80)
-        # 1. 加载阻抗数据
-        impedance_model_full = self.load_impedance_data()
-        # 2. 生成低频背景
-        Z_back = self.generate_low_frequency_background(impedance_model_full)
-        # 3. 加载地震数据
+
+        # 1. 加载3D阻抗数据 601*1189*251
+        impedance_model_full = self.load_impedance_data()           
+        # 2. 生成3D低频背景 601*1189*251
+        Z_back = self.generate_low_frequency_background(impedance_model_full)   
+        # 3. 加载3D地震数据 601*1189*251
         S_obs = self.load_seismic_data()
         # 4. 生成井位掩码
         well_pos, M_well_mask, M_well_mask_dict = self.generate_well_mask(S_obs)
@@ -392,6 +400,7 @@ class SeismicDataProcessor:
         training_data = self.build_training_profiles(
             Z_back, impedance_model_full, S_obs, well_pos, M_well_mask_dict
         )
+
         # 6. 数据归一化（直接写在此处）
         logimpmax = impedance_model_full.max()
         logimpmin = impedance_model_full.min()
@@ -403,17 +412,12 @@ class SeismicDataProcessor:
 
         # 7. 创建训练数据加载器
         # 将数据移动到指定设备
-        S_obs_norm = torch.tensor(S_obs_norm, dtype=torch.float32, device=self.device)
-        Z_full_norm = torch.tensor(Z_full_norm, dtype=torch.float32, device=self.device)
-        Z_back_norm = torch.tensor(Z_back_norm, dtype=torch.float32, device=self.device)
-        M_mask_train_set = torch.tensor(training_data['M_mask_train_set'], dtype=torch.float32, device=self.device)
-        
         train_loader = data.DataLoader(
             data.TensorDataset(
-                S_obs_norm,
-                Z_full_norm,
-                Z_back_norm,
-                M_mask_train_set
+                torch.tensor(S_obs_norm, dtype=torch.float32, device=self.device),
+                torch.tensor(Z_full_norm, dtype=torch.float32, device=self.device),
+                torch.tensor(Z_back_norm, dtype=torch.float32, device=self.device),
+                torch.tensor(training_data['M_mask_train_set'], dtype=torch.float32, device=self.device)
             ),
             batch_size=self.config['BATCH_SIZE'],
             shuffle=True
@@ -589,7 +593,6 @@ if __name__ == "__main__":
     patches, zback_patches, imp_patches, indices, shape3d = processor.build_test_patches_regular(
         S_obs, Z_back, impedance_model_full, patch_size=500, oversize=70, axis=0
     )
-    # pdb.set_trace()
     # 拼接
     reconstructed = processor.reconstruct_3d_from_patches(patches)
 

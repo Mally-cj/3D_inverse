@@ -9,7 +9,12 @@ from seisvis import plot1d
 import pdb
 import matplotlib.pyplot as plt
 import data_tools as tools
-from data_tools import run_in_thread
+import pdb
+
+
+
+
+
 
 ##判断当前环境是cpu还是gpu
 if torch.cuda.is_available():
@@ -218,6 +223,74 @@ def plot_grouped_inlines_matplotlib(back_imp, true_imp, pred_imp, well_positions
 #     inline_idx=10,
 #     save_path='logs/results/grouped_inline_10.png')
 
+
+
+def plot_sections_with_wells_single(pred_imp, true_imp, well_pos=None,section_type='inline', save_dir='results'):
+    """
+    构造DataCube并画指定方向的剖面，剖面上自动镶嵌井曲线
+    
+    Args:
+        pred_imp: 预测阻抗数据，shape (time, CMP, inline)
+        true_imp: 由测井数据插值得到的阻抗数据，shape (time, CMP, inline)
+        well_positions: 井位列表，每个元素为 (inline_idx, xline_idx)
+        section_type: 剖面类型，'inline' 或 'xline'
+        save_dir: 保存目录
+    """
+    # 构造DataCube
+    cube = DataCube()
+    cube.add_property('Predicted', pred_imp.transpose(2, 1, 0))  # 转换为 (inline, xline, time) 形状
+    
+    if well_pos is None:
+        well_pos=well_positions
+
+    # 添加井曲线
+    for i, (inline_idx, xline_idx) in enumerate(well_pos):
+        if 0 <= inline_idx < true_imp.shape[2] and 0 <= xline_idx < true_imp.shape[1]:
+            well_log = true_imp[:, xline_idx, inline_idx].reshape(-1, 1)
+            cube.add_well(f'Well-{i+1}', {'log': well_log, 'coord': (inline_idx, xline_idx)})
+
+    # 配置seisvis参数
+    config = PlotConfig()
+    size = [0, pred_imp.shape[2]-1, 0, pred_imp.shape[1]-1, pred_imp.shape[0]-1, 0]
+    plotter2d = Seis2DPlotter(cube, size, config)
+
+    ##求pred，true，back的vmin，vmax
+    vmin = min(np.nanmin(pred_imp), np.nanmin(true_imp), np.nanmin(back_imp))
+    vmax = max(np.nanmax(pred_imp), np.nanmax(true_imp), np.nanmax(back_imp))
+    
+    # 显示配置
+    show_pred = {'type': 'Predicted', 'cmap': 'AI', 'clip':(vmin,vmax), 'mask': False, 'bar': True}
+    wells_type = {'type': [f'Well-{i+1}' for i in range(len(well_pos))], 'cmap': 'AI', 'clip': (vmin,vmax), 'width': 4}
+    
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 获取需要绘制的剖面位置
+    if section_type == 'inline':
+        section_positions = list(set([inline_idx for inline_idx, _ in well_pos]))
+        x_label = 'CMP'
+    else:  # xline
+        section_positions = list(set([xline_idx for _, xline_idx in well_pos]))
+        x_label = 'Inline'
+
+    # 绘制每个剖面
+    for i,section_idx in enumerate(section_positions):
+        # 绘制预测和真实阻抗剖面
+        for imp_type, show_config in [('pred', show_pred)]:
+            plotter2d.plot_section(
+                section_idx=section_idx,
+                section_type=section_type,
+                show_properties_type=show_config,
+                show_wells_type=wells_type,
+                save_path=f'{save_dir}/well{i}_{imp_type}_{section_type}{section_idx}.png',
+                title_define=f'{imp_type.title()} Impedance ({section_type.title()} {section_idx})'
+            )
+        if i> 2: break
+        
+    
+    print(f'✅ {section_type}方向剖面图已保存到{save_dir}目录')
+
+
+
 def plot_sections_with_wells(pred_imp, true_imp, back_imp,seismic, well_pos=None,section_type='inline', save_dir='results'):
     """
     构造DataCube并画指定方向的剖面，剖面上自动镶嵌井曲线
@@ -291,3 +364,26 @@ def plot_sections_with_wells(pred_imp, true_imp, back_imp,seismic, well_pos=None
 # 调用示例
 # plot_sections_with_wells(pred_imp, true_imp,back_imp, seismic, well_positions, section_type='inline', save_dir='logs/results')
 # plot_sections_with_wells(pred_imp, true_imp,back_imp,seismic,  well_positions, section_type='xline', save_dir='logs/results')
+
+
+
+
+
+from utils import save_stage2_loss_data, save_complete_training_loss
+from data_tools import ProcessRunner
+
+class Visual_runner(ProcessRunner):
+    def __init__(self):
+        super().__init__()
+
+    def _init_worker(self):
+        pass
+
+    def _run(self, save_dir, stage2_total_loss, stage2_sup_loss, stage2_unsup_loss, stage2_tv_loss,total_lossF):
+        save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss, 
+                                stage2_unsup_loss, stage2_tv_loss)    
+    #     # 保存完整训练过程loss对比图
+        save_complete_training_loss(save_dir, total_lossF, stage2_total_loss, 
+                                    stage2_sup_loss, stage2_unsup_loss, stage2_tv_loss, 
+                                    )
+        pass

@@ -6,7 +6,7 @@
 import sys
 import torch.optim
 from Model.net2D import UNet, forward_model
-from Model.utils import DIFFZ, tv_loss, wavelet_init, save_stage1_loss_data, save_stage2_loss_data, save_complete_training_loss
+from utils import DIFFZ, tv_loss, wavelet_init, save_stage1_loss_data, save_stage2_loss_data, save_complete_training_loss
 import matplotlib.pyplot as plt
 import numpy as np
 import pylops
@@ -41,7 +41,7 @@ else:
     print("CUDA不可用，将使用CPU")
 
 
-
+from visual_results import Visual_runner
 
 PROJECT_DIR = Path(__file__).parent.resolve()
 print(f"项目目录: {PROJECT_DIR}")    ##使用多线程，不用绝对目录会乱
@@ -84,7 +84,6 @@ else:
         'gaussian_std': 25,
         'epsI': 0.1,
         'tv_loss_weight': 1.0,
-        'sup_loss_divisor': 3,
         # 打印和保存间隔
         'stage1_print_interval': 20,
         'stage2_print_interval': 10,
@@ -99,8 +98,9 @@ else:
     save_dir = os.path.join(PROJECT_DIR,f'logs/'+datetime.now().strftime("%Y%m%d-%H-%M-%S")+'/')
 
 
+
 device = torch.device(config['device'])
-print(f"🚀 Using device: {device}")
+
 dtype = torch.cuda.FloatTensor if device.type == 'cuda' else torch.FloatTensor
 
 model_save_dir= os.path.join(save_dir, 'model')
@@ -121,11 +121,14 @@ print("="*80)
 
 # 一键处理所有数据
 from data_processor import SeismicDataProcessor
-
-processor = SeismicDataProcessor(cache_dir=config['cache_dir'], device=config['device'])
-
+processor = SeismicDataProcessor(cache_dir=config['cache_dir'], device=device)
 data_info = None  # 先初始化
 train_loader, norm_params, data_info = processor.process_train_data()
+
+# visual_runner = Visual_runner()
+
+
+# test_runner = run_test.Test_runner(inference_device=torch.device(config['inference_device']),batch_size=30,patch_size=1400)
 
 # 提取归一化参数
 logimpmax = norm_params['logimpmax']
@@ -277,6 +280,9 @@ print(f"✅ 阶段2完成：UNet阻抗反演训练")
 forward_save_path= os.path.join(model_save_dir, config['forward_model_filename'])
 torch.save(forward_net.state_dict(), forward_save_path)
 
+
+
+
 # 初始化阶段2的loss记录列表
 stage2_total_loss = []
 stage2_sup_loss = []
@@ -286,6 +292,7 @@ stage2_tv_loss = []
 threads_inference=[]  # 用于存储推理线程
 
 for i in range(config['stage2_epoch_number']):
+    print(f"Epoch {i:04d}/{config['stage2_epoch_number']:04d}")
     epoch_loss = 0
     epoch_loss_sup = 0
     epoch_loss_unsup = 0
@@ -305,7 +312,7 @@ for i in range(config['stage2_epoch_number']):
         loss_sup = config['sup_coeff'] * mse(
             M_mask_batch * Z_pred, 
             M_mask_batch * Z_full_batch
-        ) * Z_full_batch.shape[3] / config['sup_loss_divisor']
+        ) * Z_full_batch.shape[3] 
         # 2. 物理约束损失（正演一致性）
         pred_reflection = DIFFZ(Z_pred)
         pred_seismic, _ = forward_net(
@@ -353,25 +360,26 @@ for i in range(config['stage2_epoch_number']):
         torch.save(net.state_dict(), model_save_path)
         print(f"💾 UNet模型已保存: {model_save_path}")
         test_save_dir= os.path.join(save_dir, 'test', f'test_epoch={i}')
-        thread=run_test.inference(
-            model_path1=forward_save_path, model_path2=model_save_path, 
-        folder_dir=test_save_dir,inference_device=config['inference_device'], 
-        config=config,PP_WW_path=PP_WW_path)
         
-        threads_inference.append(thread)
+        # test_runner.run(
+        #     model_path1=forward_save_path, model_path2=model_save_path, 
+        # folder_dir=test_save_dir, 
+        # config=config,PP_WW_path=PP_WW_path,epoch=i)
+
     
     if i % config['stage2_loss_save_interval'] == 0:
-        # 保存阶段2的loss数据
+        # visual_runner.run(save_dir, stage2_total_loss, stage2_sup_loss, stage2_unsup_loss, stage2_tv_loss,total_lossF)
+    #     # 保存阶段2的loss数据
         save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss, 
-                                stage2_unsup_loss, stage2_tv_loss)
-    
-    # 保存完整训练过程loss对比图
-    if i % config['stage2_complete_loss_save_interval'] == 0:
+                                stage2_unsup_loss, stage2_tv_loss)    
+        # 保存完整训练过程loss对比图
         save_complete_training_loss(save_dir, total_lossF, stage2_total_loss, 
                                     stage2_sup_loss, stage2_unsup_loss, stage2_tv_loss, 
                                     )
 
+# test_runner.wait_end()
 
-for thread in threads_inference:
-    thread.join()  # 等待所有推理线程完成
+# from data_tools import thread_collector
+# thread_collector.join_all()
 
+# test_runner.wait_all_inference()

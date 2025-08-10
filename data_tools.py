@@ -28,15 +28,147 @@ matplotlib.rc("font",family='WenQuanYi Micro Hei')
 
 import threading
 from functools import wraps
+from typing import List, Optional, Callable, Any
+import queue
+import time
 
 
+import multiprocessing as mp
+from abc import ABC, abstractmethod
+
+
+class ThreadRunner:
+    def __init__(self):
+        self.queue = queue.Queue()
+        self.results = []
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self.worker)
+        self.thread.daemon = True  # 设置为守护线程，主程序结束时自动结束
+        self.thread.start()
+
+    def stop(self):
+        self.stop_event.set()  # 设置停止标志
+        self.queue.put(None)   # 发送停止信号，避免线程阻塞在 queue.get()
+        if self.thread.is_alive():
+            self.thread.join()
+
+    def run(self, *args, **kwargs):
+        self.queue.put((args, kwargs))
+        print(f"当前ThreadRunner队列下有 {self.queue.qsize()} 个任务")
+
+
+    @abstractmethod
+    def _run(self, *args, **kwargs): ...
+
+    @abstractmethod
+    def _init_worker(self):  # 子类可重写
+        pass
+
+    def worker(self):
+        self._init_worker()
+        while not (self.stop_event.is_set() and self.queue.empty()):
+            try:
+                item = self.queue.get(timeout=1)  # 添加超时以避免无限阻塞
+                if item is None:  # 收到停止信号
+                    break
+                args, kwargs = item
+                self._run(*args, **kwargs)
+                self.queue.task_done()
+            except queue.Empty:
+                continue  # 超时后继续检查停止标志
+    
+    def wait_end(self):
+        ##计时，等待队列中的任务全部执行完毕
+        print(f"ThreadRunner等待队列中的任务全部执行完毕")
+        start_time = time.time()
+        self.queue.join()
+        end_time = time.time()
+        print(f"ThreadRunner等待队列中的任务全部执行完毕，耗时 {end_time - start_time:.2f} 秒")
+
+
+class ProcessRunner:
+    def __init__(self):
+        self.queue = mp.Queue()
+        self.results = []
+        self.process = mp.Process(target=self.worker)
+        self.process.start()
+
+    def stop(self):
+        if self.process.is_alive():
+            self.process.terminate()
+            self.process.join()
+
+    def run(self, *args, **kwargs):
+        print("把具体任务提交到队列中，等待执行")
+        self.queue.put((args, kwargs))
+
+    @abstractmethod
+    def _run(self, *args, **kwargs): ...
+
+    @abstractmethod
+    def _init_worker(self):  # 子类可重写
+        pass
+    
+    def worker(self):
+        self._init_worker()
+        while True:
+            args, kwargs = self.queue.get()  # 添加超时以避免无限阻塞
+            self._run(*args, **kwargs)
+
+
+
+# 全局线程队列实例
+# thread_queue = ThreadQueue()
+
+
+def run_in_queue(task_name: str = None):
+    """装饰器：将函数添加到线程队列中排队执行"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            name = task_name or f"{func.__name__}_{int(time.time())}"
+            thread_queue.add_task(func, args, kwargs, name)
+            return name  # 返回任务名称
+        return wrapper
+    return decorator
+
+
+# 兼容旧的装饰器
 def run_in_thread(func):
+    """装饰器：将函数添加到线程队列中排队执行（兼容旧接口）"""
     @wraps(func)
     def wrapper(*args, **kwargs):
-        thread = threading.Thread(target=func, args=args, kwargs=kwargs)
-        thread.start()
-        return thread  # 返回线程对象以便跟踪
+        task_name = f"{func.__name__}_{int(time.time())}"
+        thread_queue.add_task(func, args, kwargs, task_name)
+        return task_name
     return wrapper
+
+
+# 为了向后兼容，保留thread_collector接口
+class ThreadCollector:
+    """兼容旧接口的收集器，实际使用队列系统"""
+    
+    def join_all(self, timeout: Optional[float] = None):
+        """等待所有任务完成"""
+        thread_queue.wait_all_done()
+    
+    def get_alive_count(self) -> int:
+        """获取队列中的任务数量"""
+        count = thread_queue.get_queue_size()
+        if thread_queue.get_current_task():
+            count += 1  # 加上正在执行的任务
+        return count
+    
+    def clear(self):
+        """清空队列（注意：不会停止正在执行的任务）"""
+        while not thread_queue.task_queue.empty():
+            try:
+                thread_queue.task_queue.get_nowait()
+            except queue.Empty:
+                break
+
+
+thread_collector = ThreadCollector()
 
 
 class PDFManager:

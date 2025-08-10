@@ -4,10 +4,10 @@
     "sup_coeff": 20.0,
     "tv_coeff": 1.0,
     "unsup_coeff": 1.0,
-    "stage1_epoch_number": 200,
+    "stage1_epoch_number": 100,
     "stage2_epoch_number": 200,
-    "device": "cuda:2",
-    "inference_device": "cuda:1",
+    "device": "cuda:6",
+    "inference_device": "cuda:7",
     "wavelet_length": 101,
     "gaussian_std": 25,
     "epsI": 0.1,
@@ -25,9 +25,7 @@
     "unet_model_prefix": "Uet_TV_IMP_7labels_channel3",
     "cache_dir": "cache",
     "tv_loss_weight": 1.0,
-    "sup_loss_divisor": 3,
     "stage1_print_interval": 40,
     "stage2_print_interval": 40,
-    "stage2_loss_save_interval": 30,
-    "stage2_complete_loss_save_interval": 10
+    "stage2_loss_save_interval": 20
 } 
