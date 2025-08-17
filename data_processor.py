@@ -21,6 +21,7 @@ from cpp_to_py import get_wellline_and_mask as get_wellline_and_mask2
 from utils import image2cols
 from Model.joint_well import add_labels
 import data_tools as tools
+import pdb
 
 class SeismicDataProcessor:
     """
@@ -28,32 +29,31 @@ class SeismicDataProcessor:
     支持数据加载、预处理、缓存和训练数据构建
     """
 
-    def __init__(self, cache_dir='cache', device=None,type='train'):
+    def __init__(self, cache_dir='cache', device=None,type='train',train_batch_size=60,train_patch_size=120,
+    N_WELL_PROFILES=60,test_axis=0):
         """
         初始化数据处理器
 
         Args:
+            train_batch_size: 训练批量大小
+            train_patch_size: 训练patch大小
+            N_WELL_PROFILES :生成的连井剖面个数,再根据patch_size切分
             cache_dir: 缓存目录
             device: 设备类型 ('auto', 'cpu', 'cuda')
         """
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
-
+        self.test_axis=test_axis
 
         if device is not None:
             self.set_device(device)
-
-        # 根据设备自动调整参数
-        if self.device.type == 'cuda':
-            self.dtype = torch.cuda.FloatTensor
         
-
 
         if type == 'train':
             self.config = {
-                'BATCH_SIZE': 60,
-                'PATCH_SIZE': 120,
-                'N_WELL_PROFILES': 30
+                'BATCH_SIZE': train_batch_size,
+                'PATCH_SIZE': train_patch_size,
+                'N_WELL_PROFILES': N_WELL_PROFILES
             }
 
 
@@ -219,12 +219,12 @@ class SeismicDataProcessor:
         print(f"✅ 地震观测数据加载完成: {S_obs.shape}")
         return S_obs
 
-    def generate_well_mask(self, S_obs):
+    def generate_well_mask(self, shape_3d):
         """
         生成井位掩码
 
         Args:
-            S_obs: 观测地震数据
+            shape_3d: 3D数据形状
 
         Returns:
             well_pos: 井位坐标
@@ -232,7 +232,7 @@ class SeismicDataProcessor:
             M_well_mask_dict: 井位掩码字典
         """
         cache_key = self._get_cache_key("well_mask",
-                                      shape=S_obs.shape[1:3],
+                                      shape=shape_3d[1:3],
                                       full_data=True)
 
         # 尝试从缓存加载
@@ -243,7 +243,7 @@ class SeismicDataProcessor:
         print("🎯 生成井位掩码...")
 
         # 网格参数
-        nx, ny = S_obs.shape[1:3]
+        nx, ny = shape_3d[1:3]
         basex = 450
         basey = 212
 
@@ -253,7 +253,7 @@ class SeismicDataProcessor:
         well_pos = [[y-basey, x-basex] for [x, y] in pos]
 
         # 生成井位掩码
-        grid_shape = S_obs.shape[1:3]
+        grid_shape = shape_3d[1:3]
         M_well_mask_dict = generate_well_mask2(well_pos, grid_shape, well_range=15, sigma=5)
 
         # 转换为2D数组格式
@@ -272,8 +272,7 @@ class SeismicDataProcessor:
 
         return result
 
-    def build_training_profiles(self, Z_back, impedance_model_full, S_obs,
-                              well_pos, M_well_mask_dict):
+    def build_training_profiles(self,well_pos, M_well_mask_dict):
         """
         构建训练剖面数据
 
@@ -296,7 +295,15 @@ class SeismicDataProcessor:
         if cached_data is not None:
             return cached_data
 
+
         print("📦 构建训练剖面数据...")
+
+        # 1. 加载3D阻抗数据 601*1189*251
+        impedance_model_full = self.load_impedance_data()           
+        # 2. 生成3D低频背景 601*1189*251
+        Z_back = self.generate_low_frequency_background(impedance_model_full)   
+        # 3. 加载3D地震数据 601*1189*251
+        S_obs = self.load_seismic_data()
 
         # 训练井位
         train_well = add_labels(well_pos)
@@ -329,7 +336,7 @@ class SeismicDataProcessor:
 
         # 滑窗切分统一尺寸
         patchsize = self.config['PATCH_SIZE']
-        oversize = 5
+        oversize = patchsize-10
 
         Z_back_patches = []
         Z_full_patches = []
@@ -362,15 +369,17 @@ class SeismicDataProcessor:
             'Z_back_train_set': Z_back_patches_np,
             'Z_full_train_set': Z_full_patches_np,
             'S_obs_train_set': S_obs_patches_np,
-            'M_mask_train_set': M_mask_patches_np
+            'M_mask_train_set': M_mask_patches_np,
+            '3D_shape':impedance_model_full.shape
         }
 
         # 保存到缓存
         self._save_to_cache(cache_key, training_data)
 
         print(f"✅ 训练剖面数据构建完成:")
-        print(f"   - 训练样本总数: {training_data['Z_back_train_set'].shape[0]}")
-        print(f"   - 每个样本大小: {training_data['Z_back_train_set'].shape[2]}×{training_data['Z_back_train_set'].shape[3]}")
+        print(f"   - 3D阻抗数据形状: {training_data['3D_shape']}")
+        print(f"构建{len(Z_back_profiles)}个剖面，每个剖面形状为{Z_back_profiles[0].shape}")
+        print(f"构建后的全部patch,整体形状为{Z_back_patches_np.shape}")
 
         return training_data
 
@@ -388,24 +397,22 @@ class SeismicDataProcessor:
         print("🚀 开始训练数据处理流程")
         print("="*80)
 
-        # 1. 加载3D阻抗数据 601*1189*251
-        impedance_model_full = self.load_impedance_data()           
-        # 2. 生成3D低频背景 601*1189*251
-        Z_back = self.generate_low_frequency_background(impedance_model_full)   
-        # 3. 加载3D地震数据 601*1189*251
-        S_obs = self.load_seismic_data()
+        # 1. 加载3D地震数据 601*1189*251
+        S_obs = self.load_seismic_data()      ##其实这里加载只是为了获取大小信息
+        shape_3d=S_obs.shape
+
         # 4. 生成井位掩码
-        well_pos, M_well_mask, M_well_mask_dict = self.generate_well_mask(S_obs)
+        well_pos, M_well_mask, M_well_mask_dict = self.generate_well_mask(shape_3d)
         # 5. 构建训练剖面数据
         training_data = self.build_training_profiles(
-            Z_back, impedance_model_full, S_obs, well_pos, M_well_mask_dict
+         well_pos, M_well_mask_dict
         )
 
         # 6. 数据归一化（直接写在此处）
-        logimpmax = impedance_model_full.max()
-        logimpmin = impedance_model_full.min()
-        S_obs_min = S_obs.min()
-        S_obs_max = S_obs.max()
+        logimpmax = training_data['Z_full_train_set'].max()
+        logimpmin = training_data['Z_full_train_set'].min()
+        S_obs_min = training_data['S_obs_train_set'].min()
+        S_obs_max = training_data['S_obs_train_set'].max()
         Z_full_norm = (training_data['Z_full_train_set'] - logimpmin) / (logimpmax - logimpmin)
         S_obs_norm = 2 * (training_data['S_obs_train_set'] - S_obs_min) / (S_obs_max - S_obs_min) - 1
         Z_back_norm = (training_data['Z_back_train_set'] - logimpmin) / (logimpmax - logimpmin)
@@ -424,10 +431,10 @@ class SeismicDataProcessor:
         )
         # 数据信息
         data_info = {
-            'impedance_shape': impedance_model_full.shape,
-            'seismic_shape': S_obs.shape,
+            '3D_shape': shape_3d,
             'well_positions': well_pos,
-            'config': self.config
+            'config': self.config,
+            'batch_shape':S_obs_norm.shape
         }
         normalization_params = {
             'logimpmax': logimpmax,
@@ -437,6 +444,7 @@ class SeismicDataProcessor:
         }
         print("\n" + "="*80)
         print("✅ 训练数据处理流程完成")
+        print(f"数据集大小为{S_obs_norm.shape}")
         print("="*80)
         return train_loader, normalization_params, data_info
 
@@ -487,7 +495,7 @@ class SeismicDataProcessor:
         shape3d = (n_time, n_x, n_y)
         return patches, zback_patches, imp_patches, indices, shape3d
 
-    def process_test_data(self, axis=0, batch_size=500, patch_size=70, test_number=None):
+    def process_test_data(self, batch_size=500, patch_size=70, test_number=None):
         """
         返回测试patch loader、patch索引、shape3d、归一化参数，支持方向选择
         axis: 0(x方向滑窗/inline) 或 1(y方向滑窗/xline)
@@ -504,7 +512,6 @@ class SeismicDataProcessor:
         Z_full_norm = (impedance_model_full - logimpmin) / (logimpmax - logimpmin)
         
         # 使用传入的axis参数
-        self.test_axis = axis
         patches, zback_patches, imp_patches, indices, shape3d = self.build_test_patches_regular(
             S_obs_norm, Z_back_norm, Z_full_norm, patch_size, patch_size-10, axis=self.test_axis
         )
@@ -579,26 +586,42 @@ class SeismicDataProcessor:
 if __name__ == "__main__":
     """测试数据处理模块"""
     # 创建数据处理器
-    processor = SeismicDataProcessor(cache_dir='cache')
-    # train_loader, normalization_params, data_info = processor.process_train_data()
-    test_loader, indices, shape3d, norm_params = processor.process_test_data()
+    processor = SeismicDataProcessor(cache_dir='cache',device='cpu',train_batch_size=60,train_patch_size=120)
+    train_loader, normalization_params, data_info = processor.process_train_data()
+    # test_loader, indices, shape3d, norm_params = processor.process_test_data()
+
+    ##读取train_loader的第1个数据
+    
+    for idx, batch in enumerate(train_loader):
+        print(idx)
+        if idx ==3:
+            S_obs_batch, Z_full_batch, Z_back_batch, M_mask_batch=batch
+            break
 
 
-    # 假设原始 3D 数据
-    S_obs = np.random.rand(601, 1189, 251).astype(np.float32)
-    Z_back = np.random.rand(601, 1189, 251).astype(np.float32)
-    impedance_model_full = np.random.rand(601, 1189, 251).astype(np.float32)
+    # for S_obs_batch, Z_full_batch, Z_back_batch, M_mask_batch in train_loader:
+    #     print(S_obs_batch.shape)
+    #     print(Z_full_batch.shape)
+    #     print(Z_back_batch.shape)
+    #     print(M_mask_batch.shape)
+    #     break
 
-    # 切分
-    patches, zback_patches, imp_patches, indices, shape3d = processor.build_test_patches_regular(
-        S_obs, Z_back, impedance_model_full, patch_size=500, oversize=70, axis=0
-    )
-    # 拼接
-    reconstructed = processor.reconstruct_3d_from_patches(patches)
 
-    # 验证
-    assert reconstructed.shape == S_obs.shape, f"拼接后的形状 {reconstructed.shape} 与原始形状 {S_obs.shape} 不一致"
-    print("切分和拼接逻辑匹配，数据一致！")
+    # # 假设原始 3D 数据
+    # S_obs = np.random.rand(601, 1189, 251).astype(np.float32)
+    # Z_back = np.random.rand(601, 1189, 251).astype(np.float32)
+    # impedance_model_full = np.random.rand(601, 1189, 251).astype(np.float32)
+
+    # # 切分
+    # patches, zback_patches, imp_patches, indices, shape3d = processor.build_test_patches_regular(
+    #     S_obs, Z_back, impedance_model_full, patch_size=500, oversize=70, axis=0
+    # )
+    # # 拼接
+    # reconstructed = processor.reconstruct_3d_from_patches(patches)
+
+    # # 验证
+    # assert reconstructed.shape == S_obs.shape, f"拼接后的形状 {reconstructed.shape} 与原始形状 {S_obs.shape} 不一致"
+    # print("切分和拼接逻辑匹配，数据一致！")
 
     # impedance_model_full = processor.load_impedance_data()
     # Z_back = processor.generate_low_frequency_background(impedance_model_full)

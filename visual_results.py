@@ -78,7 +78,11 @@ def plot_well_curves_seisvis(true_imp, pred_imp, well_pos, back_imp=None, save_d
                 legends = ['True', 'Predicted']
                 line_styles = ['-', '--']
             
-            titles = [f'Well-{i+1} (inline={inline_idx}, xline={xline_idx})']
+            from scipy.stats import pearsonr
+
+            ##计算true_curve和pred_curve的相关性
+            corr, p_value = pearsonr(true_curve, pred_curve)
+            titles = [f'Well-{i+1} (inline={inline_idx}, xline={xline_idx}, corr={corr:.2f}, p={p_value:.2f})']
             plotter1d.plot_groups(
                 data_groups=data_groups,
                 t_start=0,
@@ -132,9 +136,9 @@ def plot_multiple_inlines_group_by_wells_seisvis(back_imp, true_imp, pred_imp, s
             cube = DataCube()
             cube.add_property(prop_name, prop_data)
             # 为当前inline上的每口井添加井曲线数据
-            for k, (w_inline, w_xline) in wells_in_inline:
-                well_log = true_imp[:, w_xline, w_inline].reshape(-1, 1)
-                cube.add_well(f'Well-{k+1}', {'log': well_log, 'coord': (w_inline, w_xline)})
+            # for k, (w_inline, w_xline) in wells_in_inline:
+            #     well_log = true_imp[:, w_xline, w_inline].reshape(-1, 1)
+            #     cube.add_well(f'Well-{k+1}', {'log': well_log, 'coord': (w_inline, w_xline)})
             config = PlotConfig()
             size = [0, prop_data.shape[2]-1, 0, prop_data.shape[1]-1, prop_data.shape[0]-1, 0]
             plotter2d = Seis2DPlotter(cube, size, config)
@@ -225,7 +229,7 @@ def plot_grouped_inlines_matplotlib(back_imp, true_imp, pred_imp, well_positions
 
 
 
-def plot_sections_with_wells_single(pred_imp, true_imp, well_pos=None,section_type='inline', save_dir='results'):
+def plot_sections_with_wells_single(pred_imp, true_imp, well_pos=None,section_type='inline', save_dir='results',epoch=0,show_well=False):
     """
     构造DataCube并画指定方向的剖面，剖面上自动镶嵌井曲线
     
@@ -261,6 +265,9 @@ def plot_sections_with_wells_single(pred_imp, true_imp, well_pos=None,section_ty
     # 显示配置
     show_pred = {'type': 'Predicted', 'cmap': 'AI', 'clip':(vmin,vmax), 'mask': False, 'bar': True}
     wells_type = {'type': [f'Well-{i+1}' for i in range(len(well_pos))], 'cmap': 'AI', 'clip': (vmin,vmax), 'width': 4}
+
+    if show_well is False:
+        wells_type = None
     
     os.makedirs(save_dir, exist_ok=True)
 
@@ -282,16 +289,16 @@ def plot_sections_with_wells_single(pred_imp, true_imp, well_pos=None,section_ty
                 show_properties_type=show_config,
                 show_wells_type=wells_type,
                 save_path=f'{save_dir}/well{i}_{imp_type}_{section_type}{section_idx}.png',
-                title_define=f'{imp_type.title()} Impedance ({section_type.title()} {section_idx})'
+                title_define=f'{imp_type.title()} Impedance ({section_type.title()} {section_idx},epoch={epoch})'
             )
-        if i> 2: break
+        # if i> 5: break
         
     
     print(f'✅ {section_type}方向剖面图已保存到{save_dir}目录')
 
 
 
-def plot_sections_with_wells(pred_imp, true_imp, back_imp,seismic, well_pos=None,section_type='inline', save_dir='results'):
+def plot_sections_with_wells(pred_imp, true_imp, back_imp,seismic, well_pos=None,section_type='inline', save_dir='results',show_well=False):
     """
     构造DataCube并画指定方向的剖面，剖面上自动镶嵌井曲线
     
@@ -332,7 +339,10 @@ def plot_sections_with_wells(pred_imp, true_imp, back_imp,seismic, well_pos=None
     show_true = {'type': 'True', 'cmap': 'AI', 'clip': (vmin,vmax), 'mask': False, 'bar': True}
     show_back = {'type': 'Background', 'cmap': 'AI', 'clip': (vmin,vmax), 'mask': False, 'bar': True}
     wells_type = {'type': [f'Well-{i+1}' for i in range(len(well_pos))], 'cmap': 'AI', 'clip': (vmin,vmax), 'width': 4}
-    show_seismic = {'type': 'Seismic', 'cmap': 'HorizonCube', 'clip': 'robust', 'mask': False, 'bar': True}
+    show_seismic = {'type': 'Seismic', 'cmap': 'Grey_scales', 'clip': 'robust', 'mask': False, 'bar': True}
+
+    if show_well is False:
+        wells_type = None
     
     os.makedirs(save_dir, exist_ok=True)
 
@@ -356,7 +366,7 @@ def plot_sections_with_wells(pred_imp, true_imp, back_imp,seismic, well_pos=None
                 save_path=f'{save_dir}/well{i}_{imp_type}_{section_type}{section_idx}.png',
                 title_define=f'{imp_type.title()} Impedance ({section_type.title()} {section_idx})'
             )
-        if i> 2: break
+        # if i> 2: break
         
     
     print(f'✅ {section_type}方向剖面图已保存到{save_dir}目录')

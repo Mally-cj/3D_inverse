@@ -98,6 +98,11 @@ else:
     save_dir = os.path.join(PROJECT_DIR,f'logs/'+datetime.now().strftime("%Y%m%d-%H-%M-%S")+'/')
 
 
+##如果save_dir文件夹存在则删除
+if os.path.exists(save_dir):
+    import shutil
+    shutil.rmtree(save_dir)
+
 
 device = torch.device(config['device'])
 
@@ -128,16 +133,17 @@ train_loader, norm_params, data_info = processor.process_train_data()
 # visual_runner = Visual_runner()
 
 
-# test_runner = run_test.Test_runner(inference_device=torch.device(config['inference_device']),batch_size=30,patch_size=1400)
+test_runner = run_test.Test_runner(inference_device=torch.device(config['inference_device']),batch_size=30,
+patch_size=1400,test_axis=config['test_axis'])
 
 # 提取归一化参数
 logimpmax = norm_params['logimpmax']
 logimpmin = norm_params['logimpmin']
 
 print(f"📊 数据处理完成:")
-print(f"   - 阻抗数据形状: {data_info['impedance_shape']}")
-print(f"   - 地震数据形状: {data_info['seismic_shape']}")
+print(f"   - 3D阻抗数据形状: {data_info['3D_shape']}")
 print(f"   - 井位数量: {len(data_info['well_positions'])}")
+print(f"   - 训练数据形状: {data_info['batch_shape']}")
 
 
 
@@ -177,9 +183,9 @@ print("\n" + "="*80)
 print("🚀 第4部分：两阶段训练算法")
 print("="*80)
 
+# pdb.set_trace()
+time_len=data_info['3D_shape'][0]
 
-size = data_info['seismic_shape'][0]  # 从数据中动态获取，不能固定
-##按照时间年月日时分秒命名文件夹
 
 
 # 优化器
@@ -219,10 +225,17 @@ for i in range(config['stage1_epoch_number']):
             torch.tensor(wav0[None, None, :, None], device=device)
         )
         # 损失：合成地震与观测地震的掩码加权MSE
+        tensor_size=Z_full_batch.shape[2]*Z_full_batch.shape[3]*Z_full_batch.shape[0]
+
         lossF = mse(
             M_mask_batch * synthetic_seismic, 
             M_mask_batch * S_obs_batch
-        ) * S_obs_batch.shape[3]
+        ) *(tensor_size/torch.sum(M_mask_batch!=0))
+        ##计算M_mask_batch中的元素个数
+        # number= torch.sum(M_mask_batch!=0)
+
+        ##计算M_mask_batch中不为0的元素个数
+        # mask_count = torch.sum(M_mask_batch!=0)
         lossF.backward()
         optimizerF.step()
         epoch_loss += lossF.item()
@@ -233,6 +246,7 @@ for i in range(config['stage1_epoch_number']):
         print(f"   Epoch {i:04d}/{config['stage1_epoch_number']:04d}, 子波矫正损失: {avg_loss:.6f}")
         print(f"      说明：损失越小，ForwardNet输出的矫正子波在高可信度区域拟合观测数据越好")
 
+# assert 0==1 ,'debug'
 # 保存阶段1的loss数据
 save_stage1_loss_data(save_dir, total_lossF)
 # 提取矫正后的子波
@@ -267,7 +281,7 @@ print("🔧 构建ForwardNet矫正后的子波的卷积算子...")
 nz = S_obs_batch.shape[2]
 S = torch.diag(0.5 * torch.ones(nz - 1), diagonal=1) - torch.diag(0.5 * torch.ones(nz - 1), diagonal=-1)
 S[0] = S[-1] = 0
-WW = pylops.utils.signalprocessing.convmtx(wav_learned_smooth/wav_learned_smooth.max(), size, len(wav_learned_smooth) // 2)[:size]
+WW = pylops.utils.signalprocessing.convmtx(wav_learned_smooth/wav_learned_smooth.max(), time_len, len(wav_learned_smooth) // 2)[:time_len]
 WW = torch.tensor(WW, dtype=torch.float32, device=device)
 WW = WW @ S.to(device)
 PP = torch.matmul(WW.T, WW) + epsI * torch.eye(WW.shape[0], device=device) ##最小二乘解的Toplitz矩阵的装置
@@ -288,8 +302,7 @@ stage2_total_loss = []
 stage2_sup_loss = []
 stage2_unsup_loss = []
 stage2_tv_loss = []
-
-threads_inference=[]  # 用于存储推理线程
+stage2_imp_loss = []
 
 for i in range(config['stage2_epoch_number']):
     print(f"Epoch {i:04d}/{config['stage2_epoch_number']:04d}")
@@ -297,14 +310,15 @@ for i in range(config['stage2_epoch_number']):
     epoch_loss_sup = 0
     epoch_loss_unsup = 0
     epoch_loss_tv = 0
+    epoch_loss_imp=0
     batch_count = 0
     for S_obs_batch, Z_full_batch, Z_back_batch, M_mask_batch in train_loader:
         optimizer.zero_grad()
         # 步骤1：最小二乘初始化
         datarn = torch.matmul(WW.T, S_obs_batch - torch.matmul(WW, Z_back_batch))
-        x, _, _, _ = torch.linalg.lstsq(PP[None, None], datarn)
+        x, _, _, _ = torch.linalg.lstsq(PP[None, None], datarn)   ##可能是这个原因！！！
         Z_init = x + Z_back_batch  # 加回低频背景
-        Z_init = (Z_init - Z_init.min()) / (Z_init.max() - Z_init.min())  # 归一化
+        Z_init = (Z_init - Z_init.min()) / (Z_init.max() - Z_init.min())  # 归一化，可以隐藏，看看是不是影响能量差异
         # 步骤2：UNet残差学习
         Z_pred = net(torch.cat([Z_init, S_obs_batch], dim=1)) + Z_init
         # 三项损失函数计算
@@ -322,35 +336,40 @@ for i in range(config['stage2_epoch_number']):
         loss_unsup =  config['unsup_coeff']* mse(pred_seismic, S_obs_batch)
         # 3. 总变分正则化损失（空间平滑性）
         loss_tv = config['tv_coeff']* tv_loss(Z_pred, config['tv_loss_weight'])
+        # 4. 阻抗损失（插值后的阻抗与预测阻抗的差异）
+        loss_imp = config['imp_coeff']*mse(Z_pred, Z_full_batch)
         # 总损失
-        total_loss = loss_unsup + loss_tv + loss_sup
+
+        total_loss = loss_unsup + loss_tv + loss_sup + loss_imp
         total_loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=config['max_grad_norm'])
         optimizer.step()
         scheduler.step()
-        batch_size=S_obs_batch.shape[0]
         epoch_loss += total_loss.item()
         epoch_loss_sup += loss_sup.item()
         epoch_loss_unsup += loss_unsup.item()
         epoch_loss_tv += loss_tv.item()
-        batch_count += batch_size
+        epoch_loss_imp += loss_imp.item()
+        batch_count += S_obs_batch.shape[0]
     
     # 记录每个epoch的平均损失
     avg_total = epoch_loss / batch_count
     avg_sup = epoch_loss_sup / batch_count
     avg_unsup = epoch_loss_unsup / batch_count
     avg_tv = epoch_loss_tv / batch_count
+    avg_imp = epoch_loss_imp / batch_count
     stage2_total_loss.append(avg_total)
     stage2_sup_loss.append(avg_sup)
     stage2_unsup_loss.append(avg_unsup)
     stage2_tv_loss.append(avg_tv)
+    stage2_imp_loss.append(avg_imp)
 
     # stage2_total_loss.append(np.log10(avg_total+1))
     # stage2_sup_loss.append(np.log10(avg_sup+1))
     # stage2_unsup_loss.append(np.log10(avg_unsup+1))
     # stage2_tv_loss.append(np.log10(avg_tv+1))
     
-    if i % config['stage2_print_interval'] == 0:
+    if i % config['stage2_print_interval'] == 0 or i ==config['stage2_epoch_number']-1:
         print(f"   Epoch {i:04d}/{config['stage2_epoch_number']:04d}")
         print(f"      总损失: {avg_total:.6f}")
         print(f"      井约束损失: {avg_sup:.6f} (高可信度区域匹配)")
@@ -361,23 +380,25 @@ for i in range(config['stage2_epoch_number']):
         print(f"💾 UNet模型已保存: {model_save_path}")
         test_save_dir= os.path.join(save_dir, 'test', f'test_epoch={i}')
         
-        # test_runner.run(
-        #     model_path1=forward_save_path, model_path2=model_save_path, 
-        # folder_dir=test_save_dir, 
-        # config=config,PP_WW_path=PP_WW_path,epoch=i)
+        test_runner.run(
+            model_path1=forward_save_path, model_path2=model_save_path, 
+        folder_dir=test_save_dir, 
+        config=config,PP_WW_path=PP_WW_path,epoch=i)
+        # break
 
     
-    if i % config['stage2_loss_save_interval'] == 0:
+    if i % config['stage2_loss_save_interval'] == 0 or i ==config['stage2_epoch_number']-1:
         # visual_runner.run(save_dir, stage2_total_loss, stage2_sup_loss, stage2_unsup_loss, stage2_tv_loss,total_lossF)
     #     # 保存阶段2的loss数据
         save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss, 
-                                stage2_unsup_loss, stage2_tv_loss)    
+                                stage2_unsup_loss, stage2_tv_loss,stage2_imp_loss)    
         # 保存完整训练过程loss对比图
         save_complete_training_loss(save_dir, total_lossF, stage2_total_loss, 
                                     stage2_sup_loss, stage2_unsup_loss, stage2_tv_loss, 
+                                    stage2_imp_loss
                                     )
 
-# test_runner.wait_end()
+test_runner.wait_end()
 
 # from data_tools import thread_collector
 # thread_collector.join_all()

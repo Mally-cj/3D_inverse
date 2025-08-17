@@ -237,7 +237,7 @@ def save_stage1_loss_data(save_dir, total_lossF):
 
 
 def save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss, 
-                         stage2_unsup_loss, stage2_tv_loss):
+                         stage2_unsup_loss, stage2_tv_loss,stage2_imp_loss):
     """
     保存阶段2（UNet阻抗反演）的loss数据并生成可视化图表
     
@@ -256,7 +256,8 @@ def save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss,
         'total_loss': stage2_total_loss,
         'supervised_loss': stage2_sup_loss,
         'unsupervised_loss': stage2_unsup_loss,
-        'tv_loss': stage2_tv_loss
+        'tv_loss': stage2_tv_loss,
+        'imp_loss': stage2_imp_loss
     }
     np.save(os.path.join(save_dir, 'stage2_loss_data.npy'), stage2_loss_data)
     # pdb.set_trace()
@@ -277,6 +278,7 @@ def save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss,
     plt.plot(range(epoch_number), stage2_sup_loss, 'g-', linewidth=2, label='Supervised Loss')
     plt.plot(range(epoch_number), stage2_unsup_loss, 'b-', linewidth=2, label='Unsupervised Loss')
     plt.plot(range(epoch_number), stage2_tv_loss, 'orange', linewidth=2, label='TV Regularization Loss')
+    plt.plot(range(epoch_number), stage2_imp_loss, 'purple', linewidth=2, label='Impedance(fake) Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss Value')
     plt.title('Stage 2: Loss Comparison')
@@ -309,7 +311,7 @@ def save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss,
     print(f"📊 阶段2损失曲线已保存: {save_dir}/stage2_unet_loss.png")
 
 def save_complete_training_loss(save_dir, total_lossF, stage2_total_loss, 
-                               stage2_sup_loss, stage2_unsup_loss, stage2_tv_loss):
+                               stage2_sup_loss, stage2_unsup_loss, stage2_tv_loss,stage2_imp_loss):
     """
     保存完整训练过程（阶段1+阶段2）的loss对比图
     
@@ -342,6 +344,8 @@ def save_complete_training_loss(save_dir, total_lossF, stage2_total_loss,
     plt.plot(range(admm_iter1), stage2_sup_loss, 'g-', linewidth=2, label='Supervised Loss')
     plt.plot(range(admm_iter1), stage2_unsup_loss, 'b-', linewidth=2, label='Unsupervised Loss')
     plt.plot(range(admm_iter1), stage2_tv_loss, 'orange', linewidth=2, label='TV Regularization Loss')
+    plt.plot(range(admm_iter1), stage2_imp_loss, 'p-', linewidth=2, label='Fake imp Loss')
+    
     plt.xlabel('Epoch')
     plt.ylabel('Loss Value')
     plt.title('Stage 2: UNet Inversion Training')

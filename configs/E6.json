@@ -6,8 +6,8 @@
     "unsup_coeff": 1.0,
     "stage1_epoch_number": 200,
     "stage2_epoch_number": 200,
-    "device": "cuda:6",
-    "inference_device": "cuda:7",
+    "device": "cuda:2",
+    "inference_device": "cuda:4",
     "wavelet_length": 101,
     "gaussian_std": 25,
     "epsI": 0.1,
@@ -27,5 +27,6 @@
     "tv_loss_weight": 1.0,
     "stage1_print_interval": 40,
     "stage2_print_interval": 40,
+    "test_axis": 0,
     "stage2_loss_save_interval": 20
 } 

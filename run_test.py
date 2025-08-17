@@ -29,11 +29,12 @@ from data_tools import ProcessRunner,ThreadRunner
 
 
 class Test_runner(ThreadRunner):
-    def __init__(self, inference_device, batch_size=30, patch_size=1400):
+    def __init__(self, inference_device, batch_size=30, patch_size=1400,test_axis=0):
         # 保存必要的配置，以便在子进程中惰性初始化
         self.inference_device = inference_device
         self.batch_size = batch_size
         self.patch_size = patch_size
+        self.test_axis=test_axis
         print(f"inference_device: {self.inference_device}")
         # 注意：不要在这里创建大量对象（如 DataLoader/Processor）。
         # 在多进程场景下，放到 _run 里按需创建，避免子进程拿不到属性或无法正确序列化。
@@ -43,7 +44,7 @@ class Test_runner(ThreadRunner):
     def _init_worker(self):
         print(f"inference_device: {self.inference_device}")
         self.inference_device = torch.device(self.inference_device)
-        self.processor = SeismicDataProcessor(cache_dir='cache', device=self.inference_device)
+        self.processor = SeismicDataProcessor(cache_dir='cache', device=self.inference_device,test_axis=self.test_axis)
         self.test_loader, self.xy, self.shape3d, self.norm_params = self.processor.process_test_data(
             batch_size=getattr(self, 'batch_size', 30),
             patch_size=getattr(self, 'patch_size', 1400)
@@ -152,12 +153,16 @@ class Test_runner(ThreadRunner):
         if epoch == 0:
             plot_well_curves_seisvis(true_3d_imp, pred_3d_imp, well_pos=None, back_imp=back_3d_imp, save_dir=folder_dir)
 
-            plot_sections_with_wells(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, well_pos=None, section_type='inline', save_dir=folder_dir)
-            plot_sections_with_wells(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, well_pos=None, section_type='xline', save_dir=folder_dir)
+            plot_sections_with_wells(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, well_pos=None, 
+            section_type='inline', save_dir=folder_dir)
+            plot_sections_with_wells(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, well_pos=None, 
+            section_type='xline', save_dir=folder_dir)
         else:
             plot_well_curves_seisvis(true_3d_imp, pred_3d_imp, well_pos=None, back_imp=None, save_dir=folder_dir)
-            plot_sections_with_wells_single(pred_3d_imp, true_3d_imp, well_pos=None, section_type='inline', save_dir=folder_dir)
-            plot_sections_with_wells_single(pred_3d_imp, true_3d_imp, well_pos=None, section_type='xline', save_dir=folder_dir)
+            plot_sections_with_wells_single(pred_3d_imp, true_3d_imp, well_pos=None, section_type='inline', 
+            save_dir=folder_dir,epoch=epoch)
+            plot_sections_with_wells_single(pred_3d_imp, true_3d_imp, well_pos=None, section_type='xline', 
+            save_dir=folder_dir,epoch=epoch)
 
     # thread1.join()
 #     # thread2.join()
