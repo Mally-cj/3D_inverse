@@ -172,7 +172,7 @@ def DIFFZ(z, device=None, dtype=None):
     DZ[..., :-1, :] = 0.5 * (z[..., 1:, :] - z[..., :-1, :])
     return DZ
 
-def tv_loss(x, alfa):
+def tv_loss(x, alfa=1.0):
     """
     总变分正则化损失，保持空间连续性
     输入: x - 预测阻抗 [batch, channel, time, space]

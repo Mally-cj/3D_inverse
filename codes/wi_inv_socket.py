@@ -8,6 +8,9 @@ Created on Wed Apr 10 10:55:26 2024
 2D 反演 unet
 @author: ET
 """
+import sys
+sys.path.append("/home/shendi_gjh_cj/codes/3D_project")
+sys.path.append("/home/shendi_gjh_cj/codes/3D_project/codes")
 import torch
 import numpy as np
 #import matplotlib.pyplot as plt
@@ -15,10 +18,15 @@ import numpy as np
 from scipy.signal.windows import tukey
 from scipy import signal
 import pdb
-import tqdm
+from tqdm import tqdm
 # from et_socket import *
-from wi_inv_model import UNet, forward_model, DIPLoss
+from wi_inv_model import UNet, DIPLoss
+from Model.net2D import forward_model
 import os
+from utils import tv_loss
+
+
+import data_tools as tools
 
 def custom_convmtx(h, n_samples, center):
     """
@@ -66,7 +74,7 @@ class WIInv:
         self._epsI = 0.1
 
         self._fLoss = 10.0              #最优损失
-        self._fLearningRate = 0.0005    #学习率
+        self._fLearningRate = 0.0001    #学习率
         self._nCmp = 0                  #最大剖面道数
         self._nSample = 0               #剖面采样数
         self._fSampleStep = 0           #采样率s
@@ -105,7 +113,8 @@ class WIInv:
 
     #初始化超参数
     #子波网络训练次数，阻抗网络训练epoch，batchsize，最大剖面道数，剖面采样数，采样率s，模型保存路径，子波数组，地震均值，地震值域跨度，初始阻抗均值，初始阻抗值域跨度
-    def reset(self, nTrainWavelet, nTrainImp, nTrainBanch, nCmp, nSample, fSampleStep, sSavePath, vWavelet, avg_seis, stddev_seis, avg_imp, stddev_imp):
+    def reset(self, nTrainWavelet, nTrainImp, nTrainBanch, nCmp, nSample, fSampleStep, sSavePath, vWavelet, avg_seis, 
+    stddev_seis, avg_imp, stddev_imp, vSeis_min, vSeis_max, vImp_min, vImp_max,train_loader):
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._nTrainWavelet = nTrainWavelet
         self._nTrainImp = nTrainImp
@@ -120,6 +129,12 @@ class WIInv:
         self._stddev_seis = stddev_seis
         self._avg_imp = avg_imp
         self._stddev_imp = stddev_imp
+
+        self._vSeis_min = vSeis_min
+        self._vSeis_max = vSeis_max
+        self._vImp_min = vImp_min
+        self._vImp_max = vImp_max
+        self.train_loader = train_loader
 
         #self._gaussian_window = gaussian(self._nWav, std = 1.0 / self._fSampleStep / 60)
         self._gaussian_window = tukey(self._nWav, 0.5)
@@ -166,13 +181,15 @@ class WIInv:
         self.vImpLow = []
         self.vMask = []
 
+        # pdb.set_trace()
+
         for i in range(len(vSeis)):
             seis = vSeis[i]
             nanSeie = np.where(np.isnan(seis))
             imp  = np.where(np.isnan(vImp[i]), np.float32(1.0), vImp[i])
             imp  = np.where(imp < 1, np.float32(1.0), imp)
-            imp  = np.log(imp)  #阻抗对数化
-            nanImp = np.where(imp==0)
+            # imp  = np.log(imp)  #阻抗对数化
+            # nanImp = np.where(imp==0)
 
 
             # #合并地震和阻抗无效区域
@@ -181,7 +198,8 @@ class WIInv:
             # nanPred = (np.array(union_rows), np.array(union_cols))
 
             # seis[nanPred] = 0
-            seis = (seis - self._avg_seis) / self._stddev_seis
+            # seis = (seis - self._avg_seis) / self._stddev_seis
+            seis = 2*(seis - self._vSeis_min) / (self._vSeis_max-self._vSeis_min) - 1
             self.vSeis.append(np.clip(seis, -5.0, 5.0))
             # imp[nanPred] = imp[np.where(imp!=0)].min()
 
@@ -191,8 +209,11 @@ class WIInv:
             impLow = signal.filtfilt(self._LP_B, self._LP_A, imp.T) #滤低频阻抗
             impLow = signal.filtfilt(np.ones(3)/float(3), 1, impLow)
             impLow = signal.filtfilt(np.ones(3)/float(3), 1, impLow.T).astype(np.float32)
-            imp = (imp - self._avg_imp) / self._stddev_imp
-            impLow = (impLow - self._avg_imp) / self._stddev_imp
+            # pdb.set_trace()
+            imp = (imp-self._vImp_min) / (self._vImp_max-self._vImp_min)
+            impLow = (impLow-self._vImp_min) / (self._vImp_max-self._vImp_min)
+            # imp = (imp - self._avg_imp) / self._stddev_imp
+            # impLow = (impLow - self._avg_imp) / self._stddev_imp
             mask = np.tile(vMask[i], [seis.shape[0], 1])  #掩码复制成二维
             # mask[nanPred] = 0
 
@@ -255,18 +276,32 @@ class WIInv:
     def trainWavelet(self):
         lossw = 0
         # progressBar.progress(progressBar.START, self._nTrainWavelet, QtCore.QCoreApplication.translate("etpyWIInv", "训练子波"))
-        for _ in range(self._nTrainWavelet):
-            vSeis, vImp, _, vMask = self.GetExample()
-            self._optimizerF.zero_grad()
-            # vImp=vImp.float()
-            self._wav=self._wav.float()
-            predF = self._modelF(self.DIFFZ(vImp), self._wav)
-            lossF = self._lossfunF(vMask * predF[0], vMask * vSeis) * self._nTrainBanch*self._nSample*vSeis.shape[3]/torch.sum(vMask)
-            lossF.backward()
-            self._optimizerF.step()
-            lossw += lossF.item()
-            # progressBar.progress(progressBar.STEP)
+        # for iter in tqdm(range(self._nTrainWavelet),desc="Training Wavelet"):
+        for iter in range(self._nTrainWavelet):
+            for vSeis, vImp, _, vMask in self.train_loader:
+                vSeis = vSeis.to(self._device)
+                vImp = vImp.to(self._device)
+                vMask = vMask.to(self._device)
+                # vSeis, vImp, _, vMask = self.GetExample()
+                # pdb.set_trace()
+                self._optimizerF.zero_grad()
+                # vImp=vImp.float()
+                self._wav=self._wav.float()
+
+                # pdb.set_trace()
+                predF = self._modelF(self.DIFFZ(vImp), self._wav)
+                lossF = self._lossfunF(vMask * predF[0], vMask * vSeis) * self._nTrainBanch*self._nSample*vSeis.shape[3]/torch.sum(vMask)
+                lossF.backward()
+                self._optimizerF.step()
+                lossw += lossF.item()
+                # progressBar.progress(progressBar.STEP)
+                # tqdm.set_postfix_str(f"Loss: {lossF.item():.4f}")
+                print(f"Epoch: {iter:2d}, Loss: {lossF:.4f}", end='\r', flush=True)
+                # print(f"Epoch: {iter:2d}, Loss: {lossF:.4f}")
+
+
         lossw /= self._nTrainWavelet
+
         #print("LastWaveletLoss:",self._nTrainBanch*self._nSample*vSeis.shape[3]/torch.sum(vMask),lossF.item())
         # print(QtCore.QCoreApplication.translate("etpyWIInv", "子波损失") + ":",lossw)
         # progressBar.progress(progressBar.STOP)
@@ -280,7 +315,7 @@ class WIInv:
             return 0
 
         self._modelF.eval()
-        _, vImp, _, _ = self.GetExample()
+        # _, vImp, _, _ = self.GetExample()
         wav0  = self._modelF(self.DIFFZ(vImp), self._wav)[1].detach().cpu().squeeze().numpy()
         wav00 = self._gaussian_window * (wav0 - wav0.mean())
         S = torch.diag(0.5 * torch.ones(self._nSample - 1), diagonal=1) - torch.diag(0.5 * torch.ones(self._nSample - 1), diagonal=-1)
@@ -293,15 +328,17 @@ class WIInv:
         self.PP = (torch.matmul(self.WW.T, self.WW) + self._epsI * (torch.eye(self.WW.shape[0])).to(self._device))[None,None]
 
         #统计最小二乘归一化参数
-        for _ in range(10):
-            vSeis, _, vImpLow, _ = self.GetExample()
-            datarn = torch.matmul(self.WW.T, vSeis - torch.matmul(self.WW, vImpLow))
-            x, _, _, _ = torch.linalg.lstsq(self.PP, datarn)
-            x = x + vImpLow
-            self.mid_x += (x.max() + x.min()) / 2
-            self.range_x += (x.max() - x.min()) / 2
-        self.mid_x /= 10
-        self.range_x /= 10
+        # for _ in range(10):
+        #     vSeis, _, vImpLow, _ = self.GetExample()
+        #     datarn = torch.matmul(self.WW.T, vSeis - torch.matmul(self.WW, vImpLow))
+        #     x, _, _, _ = torch.linalg.lstsq(self.PP, datarn)
+        #     x = x + vImpLow
+        #     self.mid_x += (x.max() + x.min()) / 2
+        #     self.range_x += (x.max() - x.min()) / 2
+        # self.mid_x /= 10
+        # self.range_x /= 10
+        
+
 
         return lossw
 
@@ -312,29 +349,54 @@ class WIInv:
         #losss=0
         #lossd=0
         #lossu=0
-        for i in range(self._nTrainImp):
-            vSeis, vImp, vImpLow, vMask = self.GetExample()
-            self._optimizer.zero_grad()
+        vmin=float('inf')
+        vmax=float('-inf')
+
+        for vSeis, vImp, vImpLow, vMask in self.train_loader:
+            vSeis = vSeis.to(self._device)
+            vImp = vImp.to(self._device)
+            vImpLow = vImpLow.to(self._device)
             datarn = torch.matmul(self.WW.T, vSeis - torch.matmul(self.WW, vImpLow)) #减去低频背景的影响，借鉴的pylops
             x, _, _, _ = torch.linalg.lstsq(self.PP, datarn)
-            x = x + vImpLow  #最小二乘解
-            x_n = (x - self.mid_x) / self.range_x #(x-x.min())/(x.max()-x.min())  #进行了一步归一化，避免最小二乘大小带来的影响
+            x = x + vImpLow
+            batch_vmin = x.min().item()
+            batch_vmax = x.max().item()
+            vmin = min(vmin, batch_vmin)
+            vmax = max(vmax, batch_vmax)
+        print(f"训练时,vmin: {vmin}, vmax: {vmax}")
 
-            pred = self._model(torch.cat([x_n, vSeis], dim=1)) + x_n
-            predF = self._modelF(self.DIFFZ(pred), self._wav)
-            loss_sup   = self._lossfun(vMask * pred, vMask * vImp) * self._nTrainBanch*self._nSample*vSeis.shape[3]/torch.sum(vMask)
-            loss_unsup = self._lossfunF(predF[0], vSeis)
-            #loss_tv   = tv_loss(pred)
-            loss_tv,_ = self._diploss(vSeis, pred)
-            total_loss = 1.0*loss_sup + 1.0*loss_unsup + 0.5*loss_tv
-            loss += total_loss.item()
-            #losss += loss_sup.item()
-            #lossd += loss_tv.item()
-            #lossu += loss_unsup.item()
-            total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=1)  
-            self._optimizer.step()  
-            self._scheduler.step()
+        for i in range(self._nTrainImp):
+            for vSeis, vImp, vImpLow, vMask in self.train_loader:
+                vSeis = vSeis.to(self._device)
+                vImp = vImp.to(self._device)
+                vImpLow = vImpLow.to(self._device)
+                vMask = vMask.to(self._device)
+                # vSeis, vImp, vImpLow, vMask = self.GetExample()
+                # pdb.set_trace()
+                self._optimizer.zero_grad()
+                datarn = torch.matmul(self.WW.T, vSeis - torch.matmul(self.WW, vImpLow)) #减去低频背景的影响，借鉴的pylops
+                x, _, _, _ = torch.linalg.lstsq(self.PP, datarn)
+                x = x + vImpLow  #最小二乘解
+                x_n = (x-vmin) / (vmax - vmin)
+                # x_n= (x-x.min())/(x.max()-x.min())
+                # x_n = (x - self.mid_x) / self.range_x #(x-x.min())/(x.max()-x.min())  #进行了一步归一化，避免最小二乘大小带来的影响
+
+                pred = self._model(torch.cat([x_n, vSeis], dim=1)) + x_n
+                predF = self._modelF(self.DIFFZ(pred), self._wav)
+                loss_sup   = self._lossfun(vMask * pred, vMask * vImp) * self._nTrainBanch*self._nSample*vSeis.shape[3]/torch.sum(vMask)
+                loss_unsup = self._lossfunF(predF[0], vSeis)
+                loss_tv   = tv_loss(pred,1.0)
+                loss_dip,_ = self._diploss(vSeis, pred)
+                total_loss = 10.0*loss_sup + 1.0*loss_unsup + 0.5*loss_dip+10*loss_tv
+                loss += total_loss.item()
+                #losss += loss_sup.item()
+                #lossd += loss_tv.item()
+                #lossu += loss_unsup.item()
+                total_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=1)  
+                self._optimizer.step()  
+                self._scheduler.step()
+                print(f"Epoch: {i:2d}, Loss: {total_loss:.4f}", end='\r', flush=True)
 
             #if i%50==0:
             #    for ib in range(len(vSeis)):
@@ -345,16 +407,15 @@ class WIInv:
             #        plt.imsave("d:/test/vRet/vPred_%d.png"%(self.iloop), pred[ib,0].cpu().detach().numpy(), cmap='gray')
             #        #predF[0].cpu().detach().numpy().tofile("d:/test/vRet/vPredF_%d.bin"%(self.iloop))
             #        self.iloop += 1
-
+        print("loss:",loss)
         loss /= self._nTrainImp
         #losss /= self._nTrainImp
         #lossd /= self._nTrainImp
         #lossu /= self._nTrainImp
-        print(loss)
         #print("sup:",losss)
         #print("unsup:",lossu)
         #print("dip:",lossd)
-        
+        # pdb.set_trace()
         if loss < self._fLoss:
             self._fLoss = loss
             res = self.save()
@@ -370,6 +431,7 @@ class WIInv:
         if self._sSavePath == "":
             return 1
         try:
+            # pdb.set_trace()
             torch.save(self._model.state_dict(), self._sSavePath)
             # print(QtCore.QCoreApplication.translate("etpyWIInv", "成功保存模型于") + ':',self.iloop)
         except:
@@ -379,38 +441,96 @@ class WIInv:
 
     #预测一个剖面
     def pred(self, vSeis, vImp):
-        nanSeie = np.where(np.isnan(vSeis))
-        vImp = np.where(np.isnan(vImp), np.float32(1.0), vImp)
-        vImp = np.where(vImp < 1, np.float32(1.0), vImp)
-        vImp = np.log(vImp)
-        nanImp = np.where(vImp==0)
-        union_indices = set(zip(*nanSeie)) | set(zip(*nanImp))
-        union_rows, union_cols = zip(*union_indices)
-        # nanPred = (np.array(union_rows), np.array(union_cols))
+        # nanSeie = np.where(np.isnan(vSeis))
+        # vImp = np.where(np.isnan(vImp), np.float32(1.0), vImp)
+        # vImp = np.where(vImp < 1, np.float32(1.0), vImp)
+        # # vImp = np.log(vImp)
+        # # nanImp = np.where(vImp==0)
+        # # union_indices = set(zip(*nanSeie)) | set(zip(*nanImp))
+        # # union_rows, union_cols = zip(*union_indices)
+        # # nanPred = (np.array(union_rows), np.array(union_cols))
 
-        # vSeis[nanPred] = 0
-        vSeis = (vSeis - self._avg_seis) / self._stddev_seis
-        vSeis = np.clip(vSeis, -5.0, 5.0)
+
+        # # vSeis[nanPred] = 0
+        # # vSeis = (vSeis - self._avg_seis) / self._stddev_seis
+        # vSeis = 2*(vSeis - self._vSeis_min) / (self._vSeis_max-self._vSeis_min) - 1
+        # vSeis = np.clip(vSeis, -5.0, 5.0)
         
-        # vImp[nanPred] = vImp[np.where(vImp!=0)].min()
+        # # vImp[nanPred] = vImp[np.where(vImp!=0)].min()
 
-        vImpLow = signal.filtfilt(self._LP_B, self._LP_A, vImp.T)
-        vImpLow = signal.filtfilt(np.ones(3)/float(3), 1, vImpLow)
-        vImpLow = signal.filtfilt(np.ones(3)/float(3), 1, vImpLow.T).astype(np.float32)
-        vImpLow = (vImpLow - self._avg_imp) / self._stddev_imp
-        vSeis = torch.tensor(vSeis[None,None]).float().to(self._device)
-        vImpLow = torch.tensor(vImpLow[None,None]).float().to(self._device)
+        # vImpLow = signal.filtfilt(self._LP_B, self._LP_A, vImp.T)
+        # vImpLow = signal.filtfilt(np.ones(3)/float(3), 1, vImpLow)
+        # vImpLow = signal.filtfilt(np.ones(3)/float(3), 1, vImpLow.T).astype(np.float32)
+
+        # vImpLow = (vImpLow - self._vImp_min) / (self._vImp_max-self._vImp_min) 
+        # # vImpLow = (vImpLow - self._avg_imp) / self._stddev_imp
+        # vSeis = torch.tensor(vSeis[None,None]).float().to(self._device)
+        # vImpLow = torch.tensor(vImpLow[None,None]).float().to(self._device)
+
+
+        vmin=float('inf')
+        vmax=float('-inf')
+        with torch.no_grad():
+            for i, (vSeis, vImpLow, _, _) in enumerate(self.test_loader):
+                vSeis = vSeis.to(self._device)
+                vImpLow = vImpLow.to(self._device)
+                datarn = torch.matmul(self.WW.T, vSeis - torch.matmul(self.WW, vImpLow))
+                x, _, _, _ = torch.linalg.lstsq(self.PP, datarn)
+                x = x + vImpLow
+                batch_vmin = x.min().item()
+                batch_vmax = x.max().item()
+                vmin = min(vmin, batch_vmin)
+                vmax = max(vmax, batch_vmax)
+        
+        print(f"推理时,vmin: {vmin}, vmax: {vmax}")
+
+
+        pred_patch_list = []
+        true_patch_list = []
+        seismic_patch_list = []
+        indices_list = []
+        implow_patch_list = []
 
         with torch.no_grad():
-            pdb.set_trace()
-            
-            datarn = torch.matmul(self.WW.T, vSeis - torch.matmul(self.WW, vImpLow))
-            x, _, _, _ = torch.linalg.lstsq(self.PP, datarn)
-            x = x + vImpLow
-            x_n = (x - self.mid_x) / self.range_x #(x-x.min())/(x.max()-x.min()) 
+            for i, (vSeis, vImpLow, vImp, indice) in enumerate(self.test_loader):
+                vSeis = vSeis.to(self._device)
+                vImpLow = vImpLow.to(self._device)
+                # vImp = vImp.to(self._device)
+                # pdb.set_trace()
+                datarn = torch.matmul(self.WW.T, vSeis - torch.matmul(self.WW, vImpLow))
+                x, _, _, _ = torch.linalg.lstsq(self.PP, datarn)
+                x = x + vImpLow
+                x_n = (x-vmin) / (vmax - vmin)
+                # x_n = (x - x.min()) / (x.max() - x.min())
+                # x_n = (x - self.mid_x) / self.range_x #(x-x.min())/(x.max()-x.min()) 
+          
+                vPred = self._model(torch.cat([x_n, vSeis], dim=1)) + x_n
+                assert torch.isnan(vPred).any() == False
+             
+                # pdb.set_trace()
+                pred_patch_list.extend(list(np.squeeze(vPred.cpu().numpy(), axis=1)))
+                true_patch_list.extend(list(np.squeeze(vImp.cpu().numpy(), axis=1)))
+                seismic_patch_list.extend(list(np.squeeze(vSeis.cpu().numpy(), axis=1)))
+                implow_patch_list.extend(list(np.squeeze(vImpLow.cpu().numpy(), axis=1)))
+                # pred_patch_list.extend(list(vPred.cpu().detach().squeeze().numpy()))
+                indices_list.extend(indice.tolist())
+                # break
+        pred_3d = self.processor.reconstruct_3d_from_patches(pred_patch_list, indices_list)
+        true_3d = self.processor.reconstruct_3d_from_patches(true_patch_list, indices_list)
+        seismic_3d = self.processor.reconstruct_3d_from_patches(seismic_patch_list, indices_list)
+        implow_3d = self.processor.reconstruct_3d_from_patches(implow_patch_list, indices_list)
+        folder="/home/shendi_gjh_cj/codes/3D_project/logs/E11-3"
+        ##如果folder不存在，就创建
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        np.save(os.path.join(folder, 'prediction_impedance.npy'), pred_3d)
+        np.save(os.path.join(folder, 'true_impedance.npy'), true_3d)
+        np.save(os.path.join(folder, 'implow_impedance.npy'), implow_3d)
+        np.save(os.path.join(folder, 'seismic_record.npy'), seismic_3d)
+        print("save to ",folder)
+        # pdb.set_trace()
 
-            vPred = self._model(torch.cat([x_n, vSeis], dim=1)) + x_n
-
+      
         #vSeis.cpu().detach().numpy().tofile("d:/test/vSeis/vSeis_%d.bin"%(self.iloop))
         #vImp.tofile("d:/test/vLabel/vImp_%d.bin"%(self.iloop))
         #vImpLow.cpu().detach().numpy().tofile("d:/test/vLabel/vImpLow_%d.bin"%(self.iloop))
@@ -418,8 +538,8 @@ class WIInv:
         #vPred.cpu().detach().numpy().tofile("d:/test/vRet/vPred_%d.bin"%(self.iloop))
         #self.iloop += 1
 
-        vPred = vPred.cpu().detach().squeeze().numpy()
-        vPred = np.exp(vPred * self._stddev_imp + self._avg_imp)
+        # vPred = vPred.cpu().detach().squeeze().numpy()
+        # vPred = np.exp(vPred * self._stddev_imp + self._avg_imp)
         # vPred[nanPred] = np.nan
 
         return vPred
@@ -506,44 +626,107 @@ def run():
 
 #这个地方需要根据实际的训练数据进行修改，bgp在训练的时候用的是把yyf_smo_train_Volume_PP_IMP当作模型数据，生成地震数据来对网络进行训练
 if __name__ == '__main__':
-    nTrainWavelet=600
-    nTrainGroup=2
-    nTrainImp=50
-    nTrainBanch=5
-    nCmp=1000
-    nSample=500
-    fSampleStep=0.001
-    vWavelet=np.random.random(257)
-    predict.reset(nTrainWavelet, nTrainImp, nTrainBanch, nCmp, nSample, fSampleStep, "/home/shendi_gjh_cj/codes/3D_project/codes/wi.pth", vWavelet, 0.5, 1, np.log(2)/2, np.log(2))
-    predict.open("")
+    import sys
+    from data_processor import SeismicDataProcessor
+    processor = SeismicDataProcessor(cache_dir='cache',device='cpu',train_batch_size=60,train_patch_size=120)
+    
+    S_obs = processor.load_seismic_data()      ##其实这里加载只是为了获取大小信息
+    shape_3d=S_obs.shape    
+    well_pos, M_well_mask, M_well_mask_dict = processor.generate_well_mask(shape_3d)
+    training_data = processor.build_training_profiles(
+        well_pos, M_well_mask_dict
+    )
+ 
+    avg_imp=training_data['Z_full_train_set'].mean()
+    stddev_imp=training_data['Z_full_train_set'].std()
+
+    vImp_min=training_data['Z_full_train_set'].min()
+    vImp_max=training_data['Z_full_train_set'].max()
+
+    avg_seis=training_data['S_obs_train_set'].mean()
+    stddev_seis=training_data['S_obs_train_set'].std()
+    vSeis_min=training_data['S_obs_train_set'].min()
+    vSeis_max=training_data['S_obs_train_set'].max()
+    
+
     vSeis = []
     vImp = []
     vMask = []
-    print("making dataset")
-    for i in range(100):
-        cmp=np.random.randint(800,1500)
-        vSeis.append(np.random.random([nSample,cmp]))
-        vImp.append(np.random.random([nSample,cmp])+1)
-        vImp[i][0,10]=0
-        vMask.append(np.random.randint(0,2,cmp))
+    # print("making dataset")
+    for i in tqdm(range(100),desc="Making dataset"):
+        vSeis.append(training_data['S_obs_train_set'][i,0])
+        vImp.append(training_data['Z_full_train_set'][i,0])
+        vMask.append(training_data['M_mask_train_set'][i,0,0])
+    # pdb.set_trace()
+    train_loader, _, _ = processor.process_train_data()
+
+    
+    nTrainWavelet=20
+    nTrainGroup=2
+    nTrainImp=10
+    nTrainBanch=20
+    nCmp=1000
+    nSample=601
+    fSampleStep=0.001
+    # vWavelet=np.random.random(257
+    from utils import wavelet_init
+    vWavelet = wavelet_init(257).squeeze().numpy()
+
+
     print("dataset made, start training wavelet")
-    predict.setTrainData(vSeis, vImp, vMask)
+    predict.reset(nTrainWavelet, nTrainImp, nTrainBanch, nCmp, nSample, fSampleStep, 
+    sSavePath="/home/shendi_gjh_cj/codes/3D_project/codes/test.pth", 
+    vWavelet=vWavelet, 
+    avg_seis=avg_seis, 
+    stddev_seis=stddev_seis, 
+    avg_imp=avg_imp, 
+    stddev_imp=stddev_imp,
+    vSeis_min=vSeis_min,
+    vSeis_max=vSeis_max,
+    vImp_min=vImp_min,
+    vImp_max=vImp_max,
+    train_loader=train_loader
+    )
+
+
+
+    predict.processor = processor
+
+    # predict.open("")
+
+
+
+    # predict.setTrainData(vSeis, vImp, vMask)
+    predict.open("")
     print("training wavelet")
     predict.trainWavelet()
 
-    for iter in range(nTrainGroup):
-        print("iter:", iter)
-        vSeis = []
-        vImp = []
-        vMask = []
-        for _ in range(100):
-            cmp=np.random.randint(800,1500)
-            vSeis.append(np.random.random([nSample,cmp]))
-            vImp.append(np.random.random([nSample,cmp])+1)
-            vMask.append(np.random.randint(0,2,cmp))
-        predict.setTrainData(vSeis, vImp, vMask)
-        predict.train()
-    predict.open("/home/shendi_gjh_cj/codes/3D_project/codes/wi.pth")
-    vSeis=np.random.random([nSample,nCmp])
-    vImp=np.random.random([nSample,nCmp])
-    vPred=predict.pred(vSeis,vImp)
+    # for iter in tqdm(range(nTrainGroup),desc="Training"):
+        # print("iter:", iter)
+        # vSeis = []
+        # vImp = []
+        # vMask = []
+        # for _ in range(10):
+        #     cmp=np.random.randint(800,1500)
+        #     pdb.set_trace()
+        #     vSeis.append(np.random.random([nSample,cmp]))
+        #     vImp.append(np.random.random([nSample,cmp])+1) #(500,1077)
+        #     vMask.append(np.random.randint(0,2,cmp)) #(1077,)
+        # predict.setTrainData(vSeis, vImp, vMask)
+    predict.train()
+    predict.open("/home/shendi_gjh_cj/codes/3D_project/codes/test.pth")
+
+    predict.test_axis=0
+    predict.processor = SeismicDataProcessor(cache_dir='cache', device='cpu',test_axis=predict.test_axis)
+    predict.test_loader, _,_,_ = predict.processor.process_test_data(
+        batch_size=50,
+        patch_size=1400
+    )
+    # # vSeis=np.random.random([nSample,nCmp])
+    # # vImp=np.random.random([nSample,nCmp])
+    vPred=predict.pred(vSeis[0],vImp[0])
+    
+    # pdb.set_trace()
+
+    
+    

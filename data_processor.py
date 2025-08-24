@@ -123,6 +123,9 @@ class SeismicDataProcessor:
             return cached_data
 
         print(f"🔄 加载阻抗数据: {file_path}")
+        ##如果找不到file_path，就加绝对路径前缀
+        if not os.path.exists(file_path):
+            file_path = os.path.join("/home/shendi_gjh_cj/codes/3D_project", file_path)
         segy = _read_segy(file_path)
         impedance_model_full = []
 
@@ -182,7 +185,7 @@ class SeismicDataProcessor:
         print(f"✅ 低频背景阻抗生成完成: {Z_back.shape}")
         return Z_back
 
-    def load_seismic_data(self, file_path="data/PSTM_resample1_lf_extension2.sgy"):
+    def load_seismic_data(self, file_path="/data/PSTM_resample1_lf_extension2.sgy"):
         """
         加载地震观测数据
 
@@ -202,6 +205,8 @@ class SeismicDataProcessor:
             return cached_data
 
         print(f"🌊 加载地震观测数据: {file_path}")
+        if not os.path.exists(file_path):
+            file_path = os.path.join("/home/shendi_gjh_cj/codes/3D_project", file_path)
         segy_seismic = _read_segy(file_path)
         S_obs = []
 
@@ -546,15 +551,15 @@ class SeismicDataProcessor:
         assert len(pred_patches[0].shape) == 2, "pred_patches 形状不正确"
         
         # 获取patch尺寸
-        print("pred_patches[0].shape", pred_patches[0].shape)
+        # print("pred_patches[0].shape", pred_patches[0].shape)
         n_time = pred_patches[0].shape[0]  # 时间维度
         patch_size = pred_patches[0].shape[1]  # 空间维度
         
-        print(f"🔍 重建信息:")
-        print(f"   - pred_patches 数量: {len(pred_patches)}")
-        print(f"   - indices 数量: {len(indices)}")
-        print(f"   - patch 形状: {pred_patches[0].shape}")
-        print(f"   - test_axis: {self.test_axis}")
+        # print(f"🔍 重建信息:")
+        # print(f"   - pred_patches 数量: {len(pred_patches)}")
+        # print(f"   - indices 数量: {len(indices)}")
+        # print(f"   - patch 形状: {pred_patches[0].shape}")
+        # print(f"   - test_axis: {self.test_axis}")
         
         # 根据indices推断空间尺寸
         if self.test_axis == 0:
@@ -587,16 +592,26 @@ if __name__ == "__main__":
     """测试数据处理模块"""
     # 创建数据处理器
     processor = SeismicDataProcessor(cache_dir='cache',device='cpu',train_batch_size=60,train_patch_size=120)
-    train_loader, normalization_params, data_info = processor.process_train_data()
+    # train_loader, normalization_params, data_info = processor.process_train_data()
     # test_loader, indices, shape3d, norm_params = processor.process_test_data()
-
+    S_obs = processor.load_seismic_data()      ##其实这里加载只是为了获取大小信息
+    shape_3d=S_obs.shape
+    print(shape_3d)
+    
+    # 4. 生成井位掩码
+    well_pos, M_well_mask, M_well_mask_dict = processor.generate_well_mask(shape_3d)
+    # 5. 构建训练剖面数据
+    training_data = processor.build_training_profiles(
+        well_pos, M_well_mask_dict
+    )
+    pdb.set_trace()
     ##读取train_loader的第1个数据
     
-    for idx, batch in enumerate(train_loader):
-        print(idx)
-        if idx ==3:
-            S_obs_batch, Z_full_batch, Z_back_batch, M_mask_batch=batch
-            break
+    # for idx, batch in enumerate(train_loader):
+    #     print(idx)
+    #     if idx ==3:
+    #         S_obs_batch, Z_full_batch, Z_back_batch, M_mask_batch=batch
+    #         break
 
 
     # for S_obs_batch, Z_full_batch, Z_back_batch, M_mask_batch in train_loader:

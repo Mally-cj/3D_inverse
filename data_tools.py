@@ -168,7 +168,7 @@ class ThreadCollector:
                 break
 
 
-thread_collector = ThreadCollector()
+# thread_collector = ThreadCollector()
 
 
 class PDFManager:
@@ -688,9 +688,24 @@ def single_imshow(img,title="img",vmin=None,vmax=None,cmap=plt.cm.jet,save=False
     cax = ax.imshow(img, cmap=cmap,vmin=vmin,vmax=vmax)
     ##shrink控制颜色条的长度相对于图像高度的比例
     # cbar = fig.colorbar(cax, ax=ax,pad=0.01,aspect=50,shrink=0.85)
-    cbar = fig.colorbar(cax, ax=ax,pad=0.01,aspect=50)
+    # 根据图片长宽比自适应调整颜色条
+    img_height, img_width = img.shape
+    aspect_ratio = img_width / img_height
+    
+    # 根据长宽比动态调整颜色条参数
+    if aspect_ratio > 2:  # 宽图
+        fraction = 0.03
+        shrink = 0.9
+    elif aspect_ratio < 0.5:  # 高图
+        fraction = 0.06
+        shrink = 0.6
+    else:  # 接近正方形的图
+        fraction = 0.046
+        shrink = 0.8
+    
+    cbar = fig.colorbar(cax, ax=ax, pad=0.01, fraction=fraction, shrink=shrink)
 
-    cbar.ax.set_title(r'$\mathrm{g/cm^3} \cdot \mathrm{m/s} $', fontsize= 12, fontweight='bold')
+    # cbar.ax.set_title(r'$\mathrm{g/cm^3} \cdot \mathrm{m/s} $', fontsize= 12, fontweight='bold')
     for label in cbar.ax.get_yticklabels():
         label.set_fontname('Times New Roman')
         label.set_fontweight('bold')

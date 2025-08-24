@@ -220,6 +220,7 @@ for i in range(config['stage1_epoch_number']):
         # 计算完整阻抗的反射系数
         reflection_coeff = DIFFZ(Z_full_batch)
         # ForwardNet(子波矫正器)：输入反射系数和初始子波，输出矫正后子波并合成地震
+        pdb.set_trace()
         synthetic_seismic, learned_wavelet = forward_net(
             reflection_coeff, 
             torch.tensor(wav0[None, None, :, None], device=device)
@@ -285,9 +286,10 @@ WW = pylops.utils.signalprocessing.convmtx(wav_learned_smooth/wav_learned_smooth
 WW = torch.tensor(WW, dtype=torch.float32, device=device)
 WW = WW @ S.to(device)
 PP = torch.matmul(WW.T, WW) + epsI * torch.eye(WW.shape[0], device=device) ##最小二乘解的Toplitz矩阵的装置
+
 ##把PP，WW保存为npz文件
 PP_WW_path=os.path.join(save_dir, 'PP_WW.npz')
-np.savez(PP_WW_path, PP=PP.cpu().numpy(), WW=WW.cpu().numpy())
+np.savez(PP_WW_path, PP=PP.cpu().numpy(), WW=WW.cpu().numpy(),wav=wav_learned_np)
 
 print(f"✅ 阶段2完成：UNet阻抗反演训练")
 # 保存Forward网络（子波矫正器）
@@ -316,6 +318,7 @@ for i in range(config['stage2_epoch_number']):
         optimizer.zero_grad()
         # 步骤1：最小二乘初始化
         datarn = torch.matmul(WW.T, S_obs_batch - torch.matmul(WW, Z_back_batch))
+        pdb.set_trace()
         x, _, _, _ = torch.linalg.lstsq(PP[None, None], datarn)   ##可能是这个原因！！！
         Z_init = x + Z_back_batch  # 加回低频背景
         Z_init = (Z_init - Z_init.min()) / (Z_init.max() - Z_init.min())  # 归一化，可以隐藏，看看是不是影响能量差异
@@ -339,7 +342,9 @@ for i in range(config['stage2_epoch_number']):
         # 4. 阻抗损失（插值后的阻抗与预测阻抗的差异）
         loss_imp = config['imp_coeff']*mse(Z_pred, Z_full_batch)
         # 总损失
-
+        ##！！加阻抗和低频的损失约束
+        ##loss_unsup和loss_sup差不多，
+        ##要看淡道不能太平滑
         total_loss = loss_unsup + loss_tv + loss_sup + loss_imp
         total_loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=config['max_grad_norm'])
@@ -380,14 +385,16 @@ for i in range(config['stage2_epoch_number']):
         print(f"💾 UNet模型已保存: {model_save_path}")
         test_save_dir= os.path.join(save_dir, 'test', f'test_epoch={i}')
         
+
         test_runner.run(
             model_path1=forward_save_path, model_path2=model_save_path, 
         folder_dir=test_save_dir, 
         config=config,PP_WW_path=PP_WW_path,epoch=i)
         # break
+        
 
     
-    if i % config['stage2_loss_save_interval'] == 0 or i ==config['stage2_epoch_number']-1:
+    if i % config['stage2_loss_save_interval'] == 0 or i ==config['stage2_epoch_number']-4:
         # visual_runner.run(save_dir, stage2_total_loss, stage2_sup_loss, stage2_unsup_loss, stage2_tv_loss,total_lossF)
     #     # 保存阶段2的loss数据
         save_stage2_loss_data(save_dir, stage2_total_loss, stage2_sup_loss, 

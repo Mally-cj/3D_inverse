@@ -22,11 +22,11 @@ if torch.cuda.is_available():
 else:
     USE_FULL_DATA = True
 
-# 加载3D低频背景阻抗，真实阻抗，预测阻抗，地震数据
-back_imp = np.load('logs/results/background_impedance.npy')
-true_imp = np.load('logs/results/true_impedance.npy')
-pred_imp = np.load('logs/results/prediction_impedance.npy')  # shape: (time, CMP, inline)
-seismic = np.load('logs/results/seismic_record.npy')  # shape: (time, CMP, inline)
+# # 加载3D低频背景阻抗，真实阻抗，预测阻抗，地震数据
+# back_imp = np.load('logs/results/background_impedance.npy')
+# true_imp = np.load('logs/results/true_impedance.npy')
+# pred_imp = np.load('logs/results/prediction_impedance.npy')  # shape: (time, CMP, inline)
+# seismic = np.load('logs/results/seismic_record.npy')  # shape: (time, CMP, inline)
 
 # 井位坐标定义
 # 根据readme.txt，井位基于Line(450-700)和CMP(212-1400)范围
@@ -93,7 +93,7 @@ def plot_well_curves_seisvis(true_imp, pred_imp, well_pos, back_imp=None, save_d
                 figsize=(4, 8),
                 save_path=f'{save_dir}/well_curve_{i+1}_inline{inline_idx}_xline{xline_idx}.png'
             )
-    print('✅ 每口井的1D曲线对比图已保存到results目录')
+    print(f'每口井的1D曲线对比图已保存到{save_dir}目录')
 
 
 # 新增：画每口井的1D曲线对比（含低频背景）
@@ -229,7 +229,7 @@ def plot_grouped_inlines_matplotlib(back_imp, true_imp, pred_imp, well_positions
 
 
 
-def plot_sections_with_wells_single(pred_imp, true_imp, well_pos=None,section_type='inline', save_dir='results',epoch=0,show_well=False):
+def plot_sections_with_wells_single(pred_imp, true_imp, re_seismic,well_pos=None,section_type='inline', save_dir='results',epoch=0,show_well=False):
     """
     构造DataCube并画指定方向的剖面，剖面上自动镶嵌井曲线
     
@@ -243,6 +243,7 @@ def plot_sections_with_wells_single(pred_imp, true_imp, well_pos=None,section_ty
     # 构造DataCube
     cube = DataCube()
     cube.add_property('Predicted', pred_imp.transpose(2, 1, 0))  # 转换为 (inline, xline, time) 形状
+    cube.add_property('Re_Seismic', re_seismic.transpose(2, 1, 0))
     
     if well_pos is None:
         well_pos=well_positions
@@ -259,12 +260,14 @@ def plot_sections_with_wells_single(pred_imp, true_imp, well_pos=None,section_ty
     plotter2d = Seis2DPlotter(cube, size, config)
 
     ##求pred，true，back的vmin，vmax
-    vmin = min(np.nanmin(pred_imp), np.nanmin(true_imp), np.nanmin(back_imp))
-    vmax = max(np.nanmax(pred_imp), np.nanmax(true_imp), np.nanmax(back_imp))
+    vmin = min(np.nanmin(pred_imp), np.nanmin(true_imp) )
+    vmax = max(np.nanmax(pred_imp), np.nanmax(true_imp))
     
     # 显示配置
     show_pred = {'type': 'Predicted', 'cmap': 'AI', 'clip':(vmin,vmax), 'mask': False, 'bar': True}
     wells_type = {'type': [f'Well-{i+1}' for i in range(len(well_pos))], 'cmap': 'AI', 'clip': (vmin,vmax), 'width': 4}
+    show_re_seismic = {'type': 'Re_Seismic', 'cmap': 'Grey_scales', 'clip': 'robust', 'mask': False, 'bar': True}
+
 
     if show_well is False:
         wells_type = None
@@ -282,7 +285,7 @@ def plot_sections_with_wells_single(pred_imp, true_imp, well_pos=None,section_ty
     # 绘制每个剖面
     for i,section_idx in enumerate(section_positions):
         # 绘制预测和真实阻抗剖面
-        for imp_type, show_config in [('pred', show_pred)]:
+        for imp_type, show_config in [('pred', show_pred),('re_seismic', show_re_seismic)]:
             plotter2d.plot_section(
                 section_idx=section_idx,
                 section_type=section_type,
@@ -366,7 +369,7 @@ def plot_sections_with_wells(pred_imp, true_imp, back_imp,seismic, well_pos=None
                 save_path=f'{save_dir}/well{i}_{imp_type}_{section_type}{section_idx}.png',
                 title_define=f'{imp_type.title()} Impedance ({section_type.title()} {section_idx})'
             )
-        # if i> 2: break
+        if i> 1: break
         
     
     print(f'✅ {section_type}方向剖面图已保存到{save_dir}目录')

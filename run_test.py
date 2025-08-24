@@ -10,7 +10,6 @@ from visual_results import plot_sections_with_wells,plot_well_curves_seisvis,plo
 import threading
 from functools import wraps
 import pdb
-from data_tools import run_in_queue, thread_collector
 
 # device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
@@ -29,7 +28,7 @@ from data_tools import ProcessRunner,ThreadRunner
 
 
 class Test_runner(ThreadRunner):
-    def __init__(self, inference_device, batch_size=30, patch_size=1400,test_axis=0):
+    def __init__(self, inference_device, batch_size=200, patch_size=400,test_axis=0):
         # 保存必要的配置，以便在子进程中惰性初始化
         self.inference_device = inference_device
         self.batch_size = batch_size
@@ -42,7 +41,7 @@ class Test_runner(ThreadRunner):
 
   
     def _init_worker(self):
-        print(f"inference_device: {self.inference_device}")
+        # print(f"inference_device: {self.inference_device}")
         self.inference_device = torch.device(self.inference_device)
         self.processor = SeismicDataProcessor(cache_dir='cache', device=self.inference_device,test_axis=self.test_axis)
         self.test_loader, self.xy, self.shape3d, self.norm_params = self.processor.process_test_data(
@@ -53,6 +52,12 @@ class Test_runner(ThreadRunner):
     def _run(self,model_path1=None,model_path2=None,folder_dir='logs/test',config=None,PP_WW_path=None,epoch=0):
         # 阶段二：加载预训练模型
         print(f"inference_device: {self.inference_device}")
+
+        forward_net = forward_model(nonlinearity='tanh').to(self.inference_device)
+        forward_net.load_state_dict(torch.load(model_path1, map_location=self.inference_device))
+
+        forward_net.eval()
+
         net = UNet(
             in_ch=config['unet_in_channels'],                 # 输入通道：[最小二乘初始解, 观测地震数据]
             out_ch=config['unet_out_channels'],                # 输出通道：阻抗残差
@@ -72,6 +77,7 @@ class Test_runner(ThreadRunner):
         PP_WW = np.load(PP_WW_path)
         PP = torch.tensor(PP_WW['PP'],device=self.inference_device)
         WW = torch.tensor(PP_WW['WW'],device=self.inference_device)
+        wav_learned=torch.tensor(PP_WW['wav'],device=self.inference_device)
         
         # 2. 推理循环
         pred_patch_list = []
@@ -80,8 +86,40 @@ class Test_runner(ThreadRunner):
         back_patch_list = []
         indices_list = []
         seismic_patch_list = []
+        re_seismic_patch_list = []
+
         # logimpmax = norm_params['logimpmax']
         # logimpmin = norm_params['logimpmin']
+        
+        # 第一个循环：计算全局的vmin和vmax用于归一化
+        print("🔄 计算全局归一化参数...")
+        vmin = float('inf')
+        vmax = float('-inf')
+        
+        with torch.no_grad():
+            for i, (s_patch, imp_patch, zback_patch, indice) in enumerate(self.test_loader):
+                s_patch = s_patch.to(self.inference_device)
+                imp_patch = imp_patch.to(self.inference_device)
+                zback_patch = zback_patch.to(self.inference_device)
+                
+                if i == 0:  # 只打印第一个batch的信息
+                    print(f"🔍 数据形状:")
+                    print(f"   - s_patch.shape: {s_patch.shape}")
+                    print(f"   - zback_patch.shape: {zback_patch.shape}")
+                    print(f"   - imp_patch.shape: {imp_patch.shape}")
+                
+                # 最小二乘初始化
+                datarn = torch.matmul(WW.T, s_patch - torch.matmul(WW, zback_patch))
+                x, _, _, _ = torch.linalg.lstsq(PP[None, None], datarn)
+                Z_init = x + zback_patch
+                
+                # 更新全局的vmin和vmax
+                batch_vmin = Z_init.min().item()
+                batch_vmax = Z_init.max().item()
+                vmin = min(vmin, batch_vmin)
+                vmax = max(vmax, batch_vmax)
+        
+        print(f"📊 全局归一化参数: vmin={vmin:.6f}, vmax={vmax:.6f}")
         with torch.no_grad():
             for i, (s_patch, imp_patch, zback_patch,indice ) in enumerate(self.test_loader):
                 s_patch = s_patch.to(self.inference_device)
@@ -98,11 +136,20 @@ class Test_runner(ThreadRunner):
                 datarn = torch.matmul(WW.T, s_patch - torch.matmul(WW, zback_patch))
                 x, _, _, _ = torch.linalg.lstsq(PP[None, None], datarn)
                 Z_init = x + zback_patch
-                Z_init = (Z_init - Z_init.min()) / (Z_init.max() - Z_init.min())
+                # Z_init = (Z_init - Z_init.min()) / (Z_init.max() - Z_init.min())
+                Z_init = (Z_init - vmin) / (vmax - vmin)
                 # 网络推理
                 Z_pred = net(torch.cat([Z_init, s_patch], dim=1)) + Z_init
                 # 收集patch结果（适配batch>1）
                 # 直接squeeze和tolist后用extend批量添加，避免for循环
+                # reflection_coeff = DIFFZ(Z_full_batch)
+                # ForwardNet(子波矫正器)：输入反射系数和初始子波，输出矫正后子波并合成地震
+                re_seismic, _ = forward_net(
+                    DIFFZ(Z_pred), 
+                    torch.tensor(wav_learned[None, None, :, None], device=self.inference_device)
+                )
+                # print(f"re_seismic.shape: {re_seismic.shape}")
+
                 Z_pred_np = np.squeeze(Z_pred.cpu().numpy(), axis=1)  # [batch, time, patch_size]
                 pred_patch_list.extend(list(Z_pred_np))
                 current_patches = len(pred_patch_list)
@@ -110,6 +157,10 @@ class Test_runner(ThreadRunner):
 
                 imp_patch_np = np.squeeze(imp_patch.cpu().numpy(), axis=1)
                 true_patch_list.extend(list(imp_patch_np))
+                
+                re_seismic_np = np.squeeze(re_seismic.cpu().numpy(), axis=1)
+                re_seismic_patch_list.extend(list(re_seismic_np))
+
 
 
                 if epoch == 0:
@@ -122,6 +173,10 @@ class Test_runner(ThreadRunner):
         # print(f"   拼回3D体...") # [N, time, patch_size]
         pred_3d = self.processor.reconstruct_3d_from_patches(pred_patch_list, indices_list)
         true_3d = self.processor.reconstruct_3d_from_patches(true_patch_list, indices_list)
+        re_seismic_3d = self.processor.reconstruct_3d_from_patches(re_seismic_patch_list, indices_list)
+
+        re_seismic_3d=(re_seismic_3d)/max(abs(re_seismic_3d.min()),re_seismic_3d.max())
+
         # pred_3d_imp = np.exp(pred_3d * (logimpmax - logimpmin) + logimpmin)
         pred_3d_imp = pred_3d
         true_3d_imp = true_3d
@@ -136,13 +191,13 @@ class Test_runner(ThreadRunner):
 
         # 5. 保存所有可视化需要的文件
         os.makedirs(f'{folder_dir}', exist_ok=True)
-        # np.save('logs/results/prediction_sample.npy', np.array(pred_patch_list))
-        # np.save('logs/results/true_sample.npy', np.array(true_patch_list))
-        # np.save('logs/results/input_sample.npy', np.array(seismic_patch_list))
-        # np.save(os.path.join(folder_dir, 'seismic_record.npy'), seismic_3d)
-        # np.save(os.path.join(folder_dir, 'prediction_impedance.npy'), pred_3d_imp)
-        # np.save(os.path.join(folder_dir, 'true_impedance.npy'), true_3d_imp)
-        # np.save(os.path.join(folder_dir, 'background_impedance.npy'), back_3d_imp)
+        np.save(os.path.join(folder_dir, 'prediction_impedance.npy'), pred_3d_imp)
+        np.save(os.path.join(folder_dir, 'true_impedance.npy'), true_3d_imp)
+        np.save(os.path.join(folder_dir, 're_seismic.npy'), re_seismic_3d)
+        if epoch == 0:
+            np.save(os.path.join(folder_dir, 'seismic_record.npy'), seismic_3d)
+            np.save(os.path.join(folder_dir, 'background_impedance.npy'), back_3d_imp)
+
 
         # print(f"✅ 推理数据已保存: {folder_dir}/prediction_impedance.npy 等 shape: {pred_3d_imp.shape}")
         # print("\n" + "="*80)
@@ -155,19 +210,44 @@ class Test_runner(ThreadRunner):
 
             plot_sections_with_wells(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, well_pos=None, 
             section_type='inline', save_dir=folder_dir)
+            
             plot_sections_with_wells(pred_3d_imp, true_3d_imp, back_3d_imp, seismic_3d, well_pos=None, 
             section_type='xline', save_dir=folder_dir)
+            pass
         else:
             plot_well_curves_seisvis(true_3d_imp, pred_3d_imp, well_pos=None, back_imp=None, save_dir=folder_dir)
-            plot_sections_with_wells_single(pred_3d_imp, true_3d_imp, well_pos=None, section_type='inline', 
+            plot_sections_with_wells_single(pred_3d_imp, true_3d_imp,re_seismic_3d, well_pos=None, section_type='inline', 
             save_dir=folder_dir,epoch=epoch)
-            plot_sections_with_wells_single(pred_3d_imp, true_3d_imp, well_pos=None, section_type='xline', 
+            plot_sections_with_wells_single(pred_3d_imp, true_3d_imp, re_seismic_3d,well_pos=None, section_type='xline', 
             save_dir=folder_dir,epoch=epoch)
 
     # thread1.join()
 #     # thread2.join()
 
-# if __name__ == '__main__':
+if __name__ == '__main__':
+
+    one=Test_runner(inference_device='cuda:0',batch_size=100,patch_size=100,test_axis=0)
+    
+    one._init_worker()
+
+
+    folderdir="/home/shendi_gjh_cj/codes/3D_project/logs/E9-5"
+    epoch=119
+    test_save_dir= os.path.join(folderdir, 'test', f'test_epoch={epoch}')
+    
+    import json
+    with open(os.path.join(folderdir,'config.json'), 'r') as f:
+        config = json.load(f)
+
+    one._run(
+        model_path1=os.path.join(folderdir,'model','forward_net_wavelet_learned.pth'),
+    model_path2=os.path.join(folderdir,'model','Uet_TV_IMP_7labels_channel3_epoch={epoch}.pth').format(epoch=epoch),
+    folder_dir=test_save_dir,
+    config=config,
+    PP_WW_path=os.path.join(folderdir,'PP_WW.npz'),
+    epoch=epoch
+    )
+
 
 #     config={
 #             'lr1': 1e-4,   ## 学习率

@@ -442,9 +442,13 @@ class forward_model(nn.Module):
                                  nn.Conv2d(in_channels=4, out_channels=4, kernel_size=(5,1), padding='same'),
                                  self.activation,
                                  nn.Conv2d(in_channels=4, out_channels=1, kernel_size=(5,1), padding='same'))
-
+        self.outc = nn.Linear(4, 1)
     def forward(self, y, x0):
-        x = self.cnn(x0)+x0
+        x = self.cnn(x0)
+        x_permuted = x.permute(0, 2, 3, 1)
+        print("x_permuted shape:", x_permuted.shape)
+        x = self.outc(x_permuted).permute(0, 3, 1, 2) + x0
+        # x = self.outc(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2) + x0
         #x = self.outc(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2) + x0
         # x = self.wavelet(x)
         y = F.conv2d(y, torch.flip(x, dims=[2]), stride=self.resolution_ratio, padding='same')
