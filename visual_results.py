@@ -93,6 +93,7 @@ def plot_well_curves_seisvis(true_imp, pred_imp, well_pos, back_imp=None, save_d
                 figsize=(4, 8),
                 save_path=f'{save_dir}/well_curve_{i+1}_inline{inline_idx}_xline{xline_idx}.png'
             )
+        if i> 1: break
     print(f'每口井的1D曲线对比图已保存到{save_dir}目录')
 
 
@@ -294,7 +295,7 @@ def plot_sections_with_wells_single(pred_imp, true_imp, re_seismic,well_pos=None
                 save_path=f'{save_dir}/well{i}_{imp_type}_{section_type}{section_idx}.png',
                 title_define=f'{imp_type.title()} Impedance ({section_type.title()} {section_idx},epoch={epoch})'
             )
-        # if i> 5: break
+        if i> 1: break
         
     
     print(f'✅ {section_type}方向剖面图已保存到{save_dir}目录')

@@ -387,7 +387,7 @@ class WIInv:
                 loss_unsup = self._lossfunF(predF[0], vSeis)
                 loss_tv   = tv_loss(pred,1.0)
                 loss_dip,_ = self._diploss(vSeis, pred)
-                total_loss = 10.0*loss_sup + 1.0*loss_unsup + 0.5*loss_dip+10*loss_tv
+                total_loss = 1*loss_sup + 1.0*loss_unsup + 30*loss_dip
                 loss += total_loss.item()
                 #losss += loss_sup.item()
                 #lossd += loss_tv.item()
@@ -519,7 +519,7 @@ class WIInv:
         true_3d = self.processor.reconstruct_3d_from_patches(true_patch_list, indices_list)
         seismic_3d = self.processor.reconstruct_3d_from_patches(seismic_patch_list, indices_list)
         implow_3d = self.processor.reconstruct_3d_from_patches(implow_patch_list, indices_list)
-        folder="/home/shendi_gjh_cj/codes/3D_project/logs/E11-3"
+        folder="/home/shendi_gjh_cj/codes/3D_project/logs/E11-4"
         ##如果folder不存在，就创建
         if not os.path.exists(folder):
             os.makedirs(folder)
