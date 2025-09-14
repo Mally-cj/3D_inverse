@@ -13,3 +13,39 @@ seisvis/dist
 
 logs/
 results/
+
+# codes/__pycache__/*.pyc
+
+codes/__pycache__/wi_inv_model.cpython-310.pyc
+
+
+codes/__pycache__/wi_inv_model.cpython-310.pyc
+
+codes/__pycache__/wi_inv_model.cpython-38.pyc
+
+
+
+# 忽略模型和权重文件
+*pth_*
+*.pth
+*.pthF
+
+# 忽略压缩文件
+*.zip
+__MACOSX*
+
+# 忽略数据和缓存文件
+/data
+*.pkl
+*.npy
+
+# 忽略编译缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 忽略构建和日志目录
+seisvis/dist
+logs/
+results/

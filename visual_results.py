@@ -63,6 +63,7 @@ def plot_well_curves_seisvis(true_imp, pred_imp, well_pos, back_imp=None, save_d
     os.makedirs(save_dir, exist_ok=True)
     
     for i, (inline_idx, xline_idx) in enumerate(well_pos):
+        # if i> 0: break
         if 0 <= inline_idx < true_imp.shape[2] and 0 <= xline_idx < true_imp.shape[1]:
             # 提取井曲线：固定inline和xline位置，取所有时间点的值
             true_curve = true_imp[:, xline_idx, inline_idx].flatten()
@@ -93,7 +94,7 @@ def plot_well_curves_seisvis(true_imp, pred_imp, well_pos, back_imp=None, save_d
                 figsize=(4, 8),
                 save_path=f'{save_dir}/well_curve_{i+1}_inline{inline_idx}_xline{xline_idx}.png'
             )
-        if i> 1: break
+
     print(f'每口井的1D曲线对比图已保存到{save_dir}目录')
 
 
@@ -153,6 +154,7 @@ def plot_multiple_inlines_group_by_wells_seisvis(back_imp, true_imp, pred_imp, s
                 show_wells_type=wells_type,
                 save_path=save_path
             )
+        if inline_idx >1:break
     print(f'✅ 每个inline分组的剖面图（Background/True/Predicted）已分别保存到{save_dir}目录（seisvis版）')
 
 # # 调用新函数，按井inline分组画4组（每组4列：背景/真实/预测/地震），每组单独保存，使用seisvis
@@ -263,6 +265,8 @@ def plot_sections_with_wells_single(pred_imp, true_imp, re_seismic,well_pos=None
     ##求pred，true，back的vmin，vmax
     vmin = min(np.nanmin(pred_imp), np.nanmin(true_imp) )
     vmax = max(np.nanmax(pred_imp), np.nanmax(true_imp))
+    vmin=5000
+    vmax=15000
     
     # 显示配置
     show_pred = {'type': 'Predicted', 'cmap': 'AI', 'clip':(vmin,vmax), 'mask': False, 'bar': True}
@@ -286,6 +290,7 @@ def plot_sections_with_wells_single(pred_imp, true_imp, re_seismic,well_pos=None
     # 绘制每个剖面
     for i,section_idx in enumerate(section_positions):
         # 绘制预测和真实阻抗剖面
+        # if i>0:break
         for imp_type, show_config in [('pred', show_pred),('re_seismic', show_re_seismic)]:
             plotter2d.plot_section(
                 section_idx=section_idx,
@@ -295,7 +300,6 @@ def plot_sections_with_wells_single(pred_imp, true_imp, re_seismic,well_pos=None
                 save_path=f'{save_dir}/well{i}_{imp_type}_{section_type}{section_idx}.png',
                 title_define=f'{imp_type.title()} Impedance ({section_type.title()} {section_idx},epoch={epoch})'
             )
-        if i> 1: break
         
     
     print(f'✅ {section_type}方向剖面图已保存到{save_dir}目录')

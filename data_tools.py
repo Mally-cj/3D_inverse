@@ -685,7 +685,7 @@ def single_imshow(img,title="img",vmin=None,vmax=None,cmap=plt.cm.jet,save=False
     if isinstance(img,torch.Tensor):
         img=img.squeeze().cpu().numpy()
     fig, ax = plt.subplots()
-    cax = ax.imshow(img, cmap=cmap,vmin=vmin,vmax=vmax)
+    cax = ax.imshow(img, cmap=cmap,vmin=vmin,vmax=vmax,aspect='auto',)
     ##shrink控制颜色条的长度相对于图像高度的比例
     # cbar = fig.colorbar(cax, ax=ax,pad=0.01,aspect=50,shrink=0.85)
     # 根据图片长宽比自适应调整颜色条
@@ -702,8 +702,14 @@ def single_imshow(img,title="img",vmin=None,vmax=None,cmap=plt.cm.jet,save=False
     else:  # 接近正方形的图
         fraction = 0.046
         shrink = 0.8
-    
-    cbar = fig.colorbar(cax, ax=ax, pad=0.01, fraction=fraction, shrink=shrink)
+    cbar = fig.colorbar(cax, ax=ax, aspect=30, shrink=1.0, pad=0.01)
+    # cbar = fig.colorbar(cax, ax=ax, pad=0.01, fraction=fraction, shrink=shrink)
+
+    # from mpl_toolkits.axes_grid1 import make_axes_locatable
+    # divider = make_axes_locatable(ax)
+    # cax = divider.append_axes("right", size="5%", pad=0.1)  # 调整 size 和 pad 控制宽度和间距
+    # cbar = fig.colorbar(cax, cax=cax)
+
 
     # cbar.ax.set_title(r'$\mathrm{g/cm^3} \cdot \mathrm{m/s} $', fontsize= 12, fontweight='bold')
     for label in cbar.ax.get_yticklabels():
@@ -747,15 +753,18 @@ def single_imshow(img,title="img",vmin=None,vmax=None,cmap=plt.cm.jet,save=False
         # save_dir='/home/shendi_gjh_cj/codes/double_dps/pic/tem/'
         save_path=os.path.join(save_dir,title+'.jpg')
         check_file_exist(save_path)
-        np.save(os.path.join(save_dir,title+'.npy'),img)
+        # np.save(os.path.join(save_dir,title+'.npy'),img)
+        plt.title(title)
+
         plt.savefig(fname=save_path,format='jpg', bbox_inches='tight', dpi=dpi)
     else:
         title=title+f" var={np.var(img):.4f},mean={np.mean(img):.4f},min={np.min(img):.4f},max={np.max(img):.4f}"
         plt.title(title)
-    # plt.imshow(img,interpolation=interpolation_method)
     if docx_manager is not None:
         fig = plt.gcf() 
-        docx_manager.add_figure(fig,width=docx_img_width)
+        # docx_manager.add_figure(fig,width=docx_img_width)
+        docx_manager.add_figure(fig)
+
     if pdf_manager is not None:
         pdf_manager.save_fig_to_pdf(fig)
     title=title+f" var={np.var(img):.4f},mean={np.mean(img):.4f},min={np.min(img):.4f},max={np.max(img):.4f}"

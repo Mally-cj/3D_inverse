@@ -1,7 +1,6 @@
 import numpy as np
 import random
 import math
-
 def generate_well_mask(well_positions, grid_shape, well_range=15, sigma=5.0):
     """
     well_positions: list of (line, cmp) tuple
@@ -16,8 +15,10 @@ def generate_well_mask(well_positions, grid_shape, well_range=15, sigma=5.0):
                     continue
                 crd = (line, cmp_)
                 weight = math.exp(-(iline**2 + icmp**2) / (2 * sigma**2))
+
                 if crd not in vWellMask or vWellMask[crd] < weight:
                     vWellMask[crd] = weight
+    
     return vWellMask
 
 def calc_grid_pos(grid_shape, points):

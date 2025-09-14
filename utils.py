@@ -192,11 +192,17 @@ def wavelet_init(wavelet_length):
     """
 
     dt = 0.001
-    t = np.arange(wavelet_length) * dt
+    t0=wavelet_length/2*dt
+    t = np.arange(wavelet_length) * dt 
     f0 = 30  # 主频30Hz
-    wav = (1 - 2*np.pi**2*f0**2*t**2) * np.exp(-np.pi**2*f0**2*t**2)
+    wav = (1 - 2*np.pi**2*f0**2*(t-t0)**2) * np.exp(-np.pi**2*f0**2*(t-t0)**2)
+
+    # plt.plot(wav)
+    # plt.legend()
+    # plt.show()
     return torch.tensor(wav, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
 
+# temp_wav = wavelet_init(257).squeeze().numpy()
 
 def average_smoothing(signal, kernel_size):
     smoothed_signal = []
